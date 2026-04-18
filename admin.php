@@ -4,15 +4,39 @@
 //  Fuente de datos: catalogo.json  (sin MySQL)
 //  admin.php
 // ══════════════════════════════════════════════════════════════
-define('CLAVE',     'mundoacc2026');
 define('MAX_MB',    8);
 define('MAX_SLOTS', 6);
 define('DATA',      __DIR__ . '/catalogo.json');
 
+// ── Usuarios del panel ───────────────────────────────────────
+// admin: control total · vendedora: solo auditoría/inventario del local
+const USUARIOS = [
+    'admin'     => ['clave' => 'mundoacc2026', 'rol' => 'admin',     'nombre' => 'Administrador'],
+    'vendedora' => ['clave' => 'dorada2026',   'rol' => 'vendedora', 'nombre' => 'Vendedora Local'],
+];
+// Compatibilidad con la clave histórica de un solo campo (sin usuario)
+const CLAVE_LEGACY = 'mundoacc2026';
+
 session_start();
 if (($_GET['salir'] ?? '') === '1') { session_destroy(); header('Location: admin.php'); exit; }
-if (($_POST['clave'] ?? '') === CLAVE) $_SESSION['ok'] = true;
+
+$loginErr = '';
+if ($_POST && isset($_POST['clave'])) {
+    $u = trim($_POST['usuario'] ?? '');
+    $c = (string)($_POST['clave'] ?? '');
+    if ($u === '' && $c === CLAVE_LEGACY) {
+        $_SESSION['ok'] = true; $_SESSION['user'] = 'admin'; $_SESSION['rol'] = 'admin';
+    } elseif (isset(USUARIOS[$u]) && hash_equals(USUARIOS[$u]['clave'], $c)) {
+        $_SESSION['ok'] = true; $_SESSION['user'] = $u; $_SESSION['rol'] = USUARIOS[$u]['rol'];
+    } else {
+        $loginErr = 'Usuario o clave incorrectos';
+    }
+}
 $auth = $_SESSION['ok'] ?? false;
+$user = $_SESSION['user'] ?? '';
+$rol  = $_SESSION['rol']  ?? '';
+$esAdmin     = $rol === 'admin';
+$esVendedora = $rol === 'vendedora';
 
 // ── JSON helpers ─────────────────────────────────────────────
 function readData(): array {
@@ -294,6 +318,59 @@ if ($auth && $action === 'home_secciones') {
     exit;
 }
 
+// ── AUDITORÍA DE INVENTARIO (semáforo foto + precio) ─────────
+if ($auth && $action === 'auditoria') {
+    header('Content-Type: application/json');
+    $data = readData();
+    // Umbrales (ajustables)
+    $precioMin   = 1000;   // por debajo se considera precio sospechoso (rojo si 0, amarillo si <min)
+    $rows = [];
+    $cnt = ['foto'=>['v'=>0,'a'=>0,'r'=>0], 'precio'=>['v'=>0,'a'=>0,'r'=>0], 'total'=>0];
+    foreach ($data['productos'] as $p) {
+        if (empty($p['activo'])) continue;
+        $id     = (int)$p['id'];
+        $nf     = foto_count($id);
+        $precio = (int)($p['precio'] ?? 0);
+
+        // Semáforo foto: rojo = 0, amarillo = solo principal (1), verde = 2+
+        if      ($nf === 0) $sf = 'r';
+        elseif  ($nf === 1) $sf = 'a';
+        else                $sf = 'v';
+
+        // Semáforo precio: rojo = 0, amarillo = >0 y <min, verde = >=min
+        if      ($precio <= 0)         $sp = 'r';
+        elseif  ($precio < $precioMin) $sp = 'a';
+        else                            $sp = 'v';
+
+        $cnt['foto'][$sf]++;
+        $cnt['precio'][$sp]++;
+        $cnt['total']++;
+
+        $rows[] = [
+            'id'        => $id,
+            'nombre'    => $p['nombre'] ?? '',
+            'categoria' => $p['categoria'] ?? '',
+            'subgrupo'  => $p['subgrupo'] ?? '',
+            'precio'    => $precio,
+            'stk'       => (int)($p['stk'] ?? 0),
+            'n_fotos'   => $nf,
+            'foto_url'  => url_f($id, 1),
+            'sem_foto'  => $sf,
+            'sem_precio'=> $sp,
+        ];
+    }
+    usort($rows, function($a,$b){
+        // Ordenar por gravedad: rojos primero, luego amarillos, luego verdes
+        $rank = ['r'=>0,'a'=>1,'v'=>2];
+        $sa = min($rank[$a['sem_foto']], $rank[$a['sem_precio']]);
+        $sb = min($rank[$b['sem_foto']], $rank[$b['sem_precio']]);
+        if ($sa !== $sb) return $sa - $sb;
+        return strcmp($a['categoria'].$a['nombre'], $b['categoria'].$b['nombre']);
+    });
+    echo json_encode(['ok'=>true,'rows'=>$rows,'cnt'=>$cnt,'precio_min'=>$precioMin]);
+    exit;
+}
+
 // ── STATS GLOBALES ────────────────────────────────────────────
 $data      = readData();
 $activos   = array_filter($data['productos'], fn($p) => $p['activo']);
@@ -540,6 +617,66 @@ body{font-family:"Poppins",sans-serif;background:var(--bg);color:var(--txt);min-
   .fotos-area{grid-template-rows:125px 44px}
   .npf-grid{grid-template-columns:1fr}
 }
+
+/* ── AUDITORÍA INVENTARIO ─────────────────────────────────── */
+.aud-back{position:fixed;inset:0;background:rgba(9,16,31,.55);z-index:500;display:none;align-items:flex-start;justify-content:center;padding:24px;overflow-y:auto}
+.aud-back.show{display:flex}
+.aud-modal{background:#fff;border-radius:16px;width:100%;max-width:1200px;box-shadow:0 30px 80px rgba(0,0,0,.35);overflow:hidden;display:flex;flex-direction:column;max-height:calc(100vh - 48px)}
+.aud-hdr{background:var(--grad);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.aud-hdr h2{font-family:"Bebas Neue";font-size:22px;letter-spacing:2px}
+.aud-hdr .sub{font-size:11px;color:rgba(255,255,255,.75);margin-top:2px}
+.aud-close{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:8px;width:32px;height:32px;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.aud-close:hover{background:rgba(255,255,255,.3)}
+.aud-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;padding:14px 20px;background:#F8F3FF;border-bottom:1px solid var(--bd)}
+.aud-stat-card{background:#fff;border:1.5px solid var(--bd);border-radius:12px;padding:12px 14px}
+.aud-stat-card h4{font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+.aud-pills{display:flex;gap:6px;align-items:center}
+.aud-pill{flex:1;text-align:center;padding:7px 4px;border-radius:8px;font-family:"Space Mono";font-size:14px;font-weight:700;color:#fff;line-height:1.1;display:flex;flex-direction:column;gap:2px}
+.aud-pill .lab{font-size:8px;font-family:"Poppins";font-weight:600;opacity:.85;letter-spacing:.5px;text-transform:uppercase}
+.aud-pill.v{background:linear-gradient(135deg,#10B981,#059669)}
+.aud-pill.a{background:linear-gradient(135deg,#F59E0B,#D97706)}
+.aud-pill.r{background:linear-gradient(135deg,#EF4444,#DC2626)}
+.aud-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:12px 20px;background:#fff;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5}
+.aud-search{flex:1;min-width:180px;border:1.5px solid var(--bd);border-radius:8px;padding:7px 12px;font-family:"Poppins";font-size:12px;outline:none}
+.aud-search:focus{border-color:var(--fu)}
+.aud-filt{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.aud-filt-lbl{font-size:10px;color:var(--mu);font-weight:600;margin-right:4px}
+.aud-filt-btn{padding:5px 11px;border-radius:100px;border:1.5px solid var(--bd);background:#fff;font-family:"Poppins";font-size:10px;font-weight:600;color:var(--mu);cursor:pointer;transition:.15s}
+.aud-filt-btn:hover{border-color:var(--vi);color:var(--vi)}
+.aud-filt-btn.act{background:var(--vi);border-color:var(--vi);color:#fff}
+.aud-filt-btn.v.act{background:#10B981;border-color:#10B981}
+.aud-filt-btn.a.act{background:#F59E0B;border-color:#F59E0B}
+.aud-filt-btn.r.act{background:#EF4444;border-color:#EF4444}
+.aud-body{flex:1;overflow-y:auto;background:var(--bg)}
+.aud-table{width:100%;border-collapse:collapse;background:#fff;font-size:12px}
+.aud-table thead th{position:sticky;top:0;background:#F0EEFF;color:var(--vi);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:10px 12px;text-align:left;border-bottom:2px solid var(--bd);z-index:2}
+.aud-table tbody tr{border-bottom:1px solid #F0F0F8;transition:background .15s}
+.aud-table tbody tr:hover{background:#FAF8FF}
+.aud-table td{padding:9px 12px;vertical-align:middle}
+.aud-thumb{width:42px;height:42px;border-radius:8px;background:#f0f0f5;object-fit:cover;display:block}
+.aud-thumb-empty{width:42px;height:42px;border-radius:8px;background:#FEE2E2;color:#DC2626;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700}
+.aud-name{font-weight:600;color:var(--txt);font-size:12px;line-height:1.3}
+.aud-id{font-family:"Space Mono";font-size:9px;color:var(--fu);background:rgba(127,31,219,.07);padding:1px 5px;border-radius:4px;display:inline-block;margin-top:2px}
+.aud-cat{font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.aud-precio{font-family:"Space Mono";font-size:12px;font-weight:700;color:var(--vi)}
+.aud-precio.zero{color:var(--err)}
+.aud-stk{font-family:"Space Mono";font-size:11px;color:var(--mu)}
+.aud-sem{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700}
+.aud-dot{display:inline-block;width:14px;height:14px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 2px rgba(0,0,0,.05)}
+.aud-dot.v{background:#10B981}
+.aud-dot.a{background:#F59E0B}
+.aud-dot.r{background:#EF4444}
+.aud-msg{padding:38px 20px;text-align:center;color:var(--mu);font-size:13px}
+.aud-loading{padding:48px 20px;text-align:center;color:var(--vi);font-weight:600}
+@media(max-width:600px){
+  .aud-back{padding:0}
+  .aud-modal{border-radius:0;max-height:100vh;height:100vh}
+  .aud-hdr h2{font-size:18px}
+  .aud-stats{grid-template-columns:1fr}
+  .aud-table thead th:nth-child(2),
+  .aud-table tbody td:nth-child(2){display:none}
+  .aud-table td,.aud-table th{padding:7px 8px;font-size:11px}
+}
 </style>
 </head>
 <body>
@@ -549,11 +686,16 @@ body{font-family:"Poppins",sans-serif;background:var(--bg);color:var(--txt);min-
   <div class="lbox">
     <h1>Panel Admin</h1>
     <p>Mundo Accesorios Dorada</p>
-    <?php if ($_POST): ?><div class="err">Clave incorrecta</div><?php endif ?>
-    <form method="POST">
-      <input type="password" name="clave" placeholder="Clave de acceso" autofocus>
+    <?php if ($loginErr): ?><div class="err"><?= htmlspecialchars($loginErr) ?></div><?php endif ?>
+    <form method="POST" autocomplete="off">
+      <input type="text" name="usuario" placeholder="Usuario (admin o vendedora)" autofocus>
+      <input type="password" name="clave" placeholder="Clave">
       <button type="submit">Entrar</button>
     </form>
+    <p style="margin-top:14px;font-size:11px;color:var(--mu);line-height:1.5">
+      <strong style="color:var(--vi)">Vendedora del local:</strong><br>
+      usá tu usuario y clave para revisar inventario.
+    </p>
   </div>
 </div>
 
@@ -566,6 +708,10 @@ body{font-family:"Poppins",sans-serif;background:var(--bg);color:var(--txt);min-
   </div>
   <div class="hbtns">
     <span class="dest-chip" id="destChip"><?= $gDest ?> destacados</span>
+    <span class="dest-chip" style="background:rgba(255,255,255,.18);color:#fff;border-color:rgba(255,255,255,.3)">
+      <?= htmlspecialchars(USUARIOS[$user]['nombre'] ?? $user) ?> · <?= htmlspecialchars($rol) ?>
+    </span>
+    <button class="hbtn w" onclick="abrirAuditoria()" title="Auditoría de inventario">Auditoría</button>
     <a class="hbtn" href="index.php" target="_blank">Ver sitio</a>
     <button class="hbtn w" onclick="location.reload()">Actualizar</button>
     <a class="hbtn" href="?salir=1">Salir</a>
@@ -629,6 +775,40 @@ body{font-family:"Poppins",sans-serif;background:var(--bg);color:var(--txt);min-
 
 <input type="file" id="fi" accept="image/*" style="display:none">
 <div class="toast" id="toast"></div>
+
+<!-- ── MODAL AUDITORÍA INVENTARIO ───────────────────────────── -->
+<div class="aud-back" id="audBack" onclick="if(event.target===this)cerrarAuditoria()">
+  <div class="aud-modal">
+    <div class="aud-hdr">
+      <div>
+        <h2>Auditoría de inventario</h2>
+        <div class="sub">Semáforo verde / amarillo / rojo · foto y precio por producto</div>
+      </div>
+      <button class="aud-close" onclick="cerrarAuditoria()" title="Cerrar (Esc)">&#10005;</button>
+    </div>
+    <div class="aud-stats" id="audStats"></div>
+    <div class="aud-tools">
+      <input type="text" class="aud-search" id="audSearch" placeholder="Buscar por nombre, ID o categoría..." oninput="audFiltrar()">
+      <div class="aud-filt">
+        <span class="aud-filt-lbl">Foto:</span>
+        <button class="aud-filt-btn act" data-tipo="foto" data-val="all" onclick="audSetFiltro(this)">Todas</button>
+        <button class="aud-filt-btn r"   data-tipo="foto" data-val="r"   onclick="audSetFiltro(this)">Sin foto</button>
+        <button class="aud-filt-btn a"   data-tipo="foto" data-val="a"   onclick="audSetFiltro(this)">Solo 1</button>
+        <button class="aud-filt-btn v"   data-tipo="foto" data-val="v"   onclick="audSetFiltro(this)">2+</button>
+      </div>
+      <div class="aud-filt">
+        <span class="aud-filt-lbl">Precio:</span>
+        <button class="aud-filt-btn act" data-tipo="precio" data-val="all" onclick="audSetFiltro(this)">Todos</button>
+        <button class="aud-filt-btn r"   data-tipo="precio" data-val="r"   onclick="audSetFiltro(this)">Sin precio</button>
+        <button class="aud-filt-btn a"   data-tipo="precio" data-val="a"   onclick="audSetFiltro(this)">Sospechoso</button>
+        <button class="aud-filt-btn v"   data-tipo="precio" data-val="v"   onclick="audSetFiltro(this)">OK</button>
+      </div>
+    </div>
+    <div class="aud-body" id="audBody">
+      <div class="aud-loading">Cargando auditoría...</div>
+    </div>
+  </div>
+</div>
 
 <script>
 // ── ESTADO ───────────────────────────────────────────────────
@@ -1408,6 +1588,104 @@ function toggleHcp(){
   arrow.innerHTML=body.classList.contains('open')?'&#9650;':'&#9660;';
 }
 hcpInit();
+
+// ── AUDITORÍA INVENTARIO ─────────────────────────────────────
+let audData = null;
+const audFiltro = { foto: 'all', precio: 'all' };
+
+async function abrirAuditoria() {
+  document.getElementById('audBack').classList.add('show');
+  document.body.style.overflow = 'hidden';
+  if (!audData) await audCargar();
+}
+function cerrarAuditoria() {
+  document.getElementById('audBack').classList.remove('show');
+  document.body.style.overflow = '';
+}
+async function audCargar() {
+  const body = document.getElementById('audBody');
+  body.innerHTML = '<div class="aud-loading">Cargando auditoría...</div>';
+  try {
+    const d = await fetch('admin.php?action=auditoria').then(r=>r.json());
+    if (!d.ok) throw new Error();
+    audData = d;
+    audPintarStats();
+    audPintarTabla();
+  } catch {
+    body.innerHTML = '<div class="aud-msg" style="color:var(--err)">No se pudo cargar la auditoría</div>';
+  }
+}
+function audPintarStats() {
+  const c = audData.cnt;
+  const total = c.total || 1;
+  const pctF = Math.round((c.foto.v / total) * 100);
+  const pctP = Math.round((c.precio.v / total) * 100);
+  document.getElementById('audStats').innerHTML = `
+    <div class="aud-stat-card">
+      <h4>Foto · ${c.total} productos · ${pctF}% OK</h4>
+      <div class="aud-pills">
+        <div class="aud-pill v">${c.foto.v}<span class="lab">2+ fotos</span></div>
+        <div class="aud-pill a">${c.foto.a}<span class="lab">solo 1</span></div>
+        <div class="aud-pill r">${c.foto.r}<span class="lab">sin foto</span></div>
+      </div>
+    </div>
+    <div class="aud-stat-card">
+      <h4>Precio · ${c.total} productos · ${pctP}% OK</h4>
+      <div class="aud-pills">
+        <div class="aud-pill v">${c.precio.v}<span class="lab">&ge; $${audData.precio_min.toLocaleString('es-CO')}</span></div>
+        <div class="aud-pill a">${c.precio.a}<span class="lab">sospechoso</span></div>
+        <div class="aud-pill r">${c.precio.r}<span class="lab">sin precio</span></div>
+      </div>
+    </div>
+  `;
+}
+function audPintarTabla() {
+  const q = (document.getElementById('audSearch').value || '').toLowerCase().trim();
+  const rows = audData.rows.filter(r => {
+    if (audFiltro.foto   !== 'all' && r.sem_foto   !== audFiltro.foto)   return false;
+    if (audFiltro.precio !== 'all' && r.sem_precio !== audFiltro.precio) return false;
+    if (q && !(r.nombre.toLowerCase().includes(q)
+            || r.categoria.toLowerCase().includes(q)
+            || String(r.id) === q)) return false;
+    return true;
+  });
+  const body = document.getElementById('audBody');
+  if (!rows.length) {
+    body.innerHTML = '<div class="aud-msg">Sin resultados con esos filtros</div>';
+    return;
+  }
+  const labFoto = { v:'2+ fotos', a:'solo 1', r:'sin foto' };
+  const labPre  = { v:'OK', a:'sospechoso', r:'sin precio' };
+  body.innerHTML = `<table class="aud-table">
+    <thead><tr>
+      <th></th><th>Producto</th><th>Categoría</th><th>Precio</th><th>Stock</th><th>Foto</th><th>Precio</th>
+    </tr></thead>
+    <tbody>
+      ${rows.map(r => `<tr>
+        <td>${r.foto_url ? `<img class="aud-thumb" src="${r.foto_url}" alt="">` : '<div class="aud-thumb-empty">!</div>'}</td>
+        <td><div class="aud-name">${r.nombre}</div><span class="aud-id">#${r.id}</span>${r.subgrupo?` <span style="font-size:9px;color:var(--mu)">· ${r.subgrupo}</span>`:''}</td>
+        <td><span class="aud-cat">${r.categoria || '—'}</span></td>
+        <td><span class="aud-precio ${r.precio<=0?'zero':''}">${r.precio>0 ? '$'+r.precio.toLocaleString('es-CO') : 'sin precio'}</span></td>
+        <td><span class="aud-stk">${r.stk} uds</span></td>
+        <td><span class="aud-sem"><span class="aud-dot ${r.sem_foto}"></span>${labFoto[r.sem_foto]} <span style="font-size:9px;color:var(--mu);margin-left:3px">${r.n_fotos}/6</span></span></td>
+        <td><span class="aud-sem"><span class="aud-dot ${r.sem_precio}"></span>${labPre[r.sem_precio]}</span></td>
+      </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+function audSetFiltro(btn) {
+  const tipo = btn.dataset.tipo, val = btn.dataset.val;
+  audFiltro[tipo] = val;
+  btn.parentElement.querySelectorAll('.aud-filt-btn').forEach(b => b.classList.remove('act'));
+  btn.classList.add('act');
+  audPintarTabla();
+}
+function audFiltrar() {
+  if (audData) audPintarTabla();
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('audBack').classList.contains('show')) cerrarAuditoria();
+});
 </script>
 <?php endif ?>
 </body>
