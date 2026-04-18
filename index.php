@@ -394,28 +394,47 @@ nav{position:fixed;top:0;left:0;right:0;z-index:300;height:72px;
 .sec-foot-ver svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2}
 
 /* PREFOOTER */
-.prefooter{background:var(--ink);padding:100px 48px;text-align:center;position:relative;overflow:hidden}
+.prefooter{background:var(--ink);padding:clamp(56px,9vw,100px) clamp(20px,5vw,48px);text-align:center;position:relative;overflow:hidden}
 .prefooter::before{content:'';position:absolute;inset:0;pointer-events:none;
   background:radial-gradient(ellipse 60% 70% at 15% 50%,rgba(247,37,133,.12),transparent),
              radial-gradient(ellipse 55% 60% at 85% 30%,rgba(114,9,183,.15),transparent)}
 .prefooter::after{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--grad)}
-.pf-in{position:relative;z-index:1;max-width:460px;margin:0 auto;display:flex;flex-direction:column;align-items:center}
+.pf-in{position:relative;z-index:1;max-width:520px;margin:0 auto;display:flex;flex-direction:column;align-items:center;width:100%}
 .pf-badge{padding:5px 16px;border-radius:100px;border:1px solid rgba(255,255,255,.12);
   font-size:.55rem;font-weight:500;letter-spacing:.2em;text-transform:uppercase;
-  color:rgba(255,255,255,.4);margin-bottom:28px;display:inline-block}
-.prefooter h2{font-family:'Cormorant Garamond',serif;font-size:clamp(2.4rem,5vw,3.8rem);
-  font-weight:500;line-height:.95;letter-spacing:-.01em;color:#fff;margin-bottom:14px}
+  color:rgba(255,255,255,.4);margin-bottom:24px;display:inline-block}
+.prefooter h2{font-family:'Cormorant Garamond',serif;font-size:clamp(2rem,7vw,3.4rem);
+  font-weight:500;line-height:1;letter-spacing:-.01em;color:#fff;margin-bottom:14px}
 .prefooter h2 em{font-style:italic;background:var(--gs);
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.prefooter p{font-size:.85rem;font-weight:300;color:rgba(255,255,255,.38);line-height:1.75;margin-bottom:40px}
-.pf-wa{display:inline-flex;align-items:center;gap:10px;padding:16px 40px;border-radius:50px;
-  background:linear-gradient(135deg,#25D366,#1AAF55);color:#fff;font-size:.85rem;font-weight:500;
-  letter-spacing:.04em;box-shadow:0 8px 32px rgba(37,211,102,.28);transition:.2s;margin-bottom:18px}
-.pf-wa:hover{transform:translateY(-3px);box-shadow:0 14px 44px rgba(37,211,102,.38)}
-.pf-wa svg{width:18px;height:18px;fill:#fff}
-.pf-cat{font-size:.75rem;color:rgba(255,255,255,.3);letter-spacing:.04em;
-  border-bottom:1px solid rgba(255,255,255,.1);padding-bottom:1px;transition:.2s}
-.pf-cat:hover{color:rgba(255,255,255,.65);border-color:rgba(255,255,255,.3)}
+.prefooter p{font-size:clamp(.78rem,2.2vw,.88rem);font-weight:300;color:rgba(255,255,255,.42);line-height:1.7;margin-bottom:30px;max-width:380px}
+.pf-actions{display:grid;grid-template-columns:1fr;gap:12px;width:100%;max-width:360px;margin-bottom:22px}
+.pf-btn{display:flex;align-items:center;justify-content:center;gap:9px;
+  padding:14px 20px;border-radius:14px;font-size:.82rem;font-weight:500;letter-spacing:.03em;
+  text-decoration:none;transition:.2s;position:relative;overflow:hidden;white-space:nowrap}
+.pf-btn svg{width:17px;height:17px;flex-shrink:0}
+.pf-btn.wa{background:linear-gradient(135deg,#25D366,#1AAF55);color:#fff;
+  box-shadow:0 6px 24px rgba(37,211,102,.28)}
+.pf-btn.wa:hover{transform:translateY(-2px);box-shadow:0 12px 36px rgba(37,211,102,.38)}
+.pf-btn.wa svg{fill:#fff}
+.pf-btn.cat{background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.14)}
+.pf-btn.cat:hover{background:rgba(255,255,255,.11);border-color:rgba(255,255,255,.26);transform:translateY(-2px)}
+.pf-btn.cat svg{stroke:#fff;fill:none;stroke-width:1.8}
+.pf-btn.asesor{background:linear-gradient(135deg,#B5179E,#7209B7);color:#fff;
+  box-shadow:0 6px 24px rgba(181,23,158,.3)}
+.pf-btn.asesor:hover{transform:translateY(-2px);box-shadow:0 12px 36px rgba(181,23,158,.42)}
+.pf-btn.asesor svg{stroke:#fff;fill:none;stroke-width:1.8}
+.pf-btn.asesor .pf-new{position:absolute;top:-7px;right:10px;
+  background:linear-gradient(135deg,#F72585,#B5179E);color:#fff;
+  font-size:.55rem;font-weight:600;letter-spacing:.1em;padding:2px 8px;border-radius:50px;
+  text-transform:uppercase;box-shadow:0 2px 8px rgba(247,37,133,.4)}
+.pf-note{font-size:.68rem;color:rgba(255,255,255,.3);letter-spacing:.04em;
+  line-height:1.6;margin-top:4px;max-width:320px}
+.pf-note strong{color:rgba(255,255,255,.55);font-weight:500}
+@media(min-width:560px){
+  .pf-actions{grid-template-columns:1fr 1fr;max-width:460px}
+  .pf-btn.wa{grid-column:1/-1}
+}
 
 /* FOOTER */
 footer{background:#0f0416;padding:56px 64px 40px}
@@ -667,12 +686,25 @@ $ARR_SVG='<svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6" stroke-linecap="round
   <div class="pf-in">
     <div class="pf-badge">Atención directa &middot; Sin intermediarios</div>
     <h2>¿Lista para<br><em>encontrarlo?</em></h2>
-    <p>Stock real. Precio directo. Respuesta en minutos.</p>
-    <a class="pf-wa" href="<?=$WA?>" target="_blank">
-      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="#fff" d="M17.47 14.38c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.94 1.16-.17.2-.35.22-.64.08-.3-.15-1.26-.46-2.39-1.48-.88-.79-1.48-1.76-1.65-2.06-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.03-.52-.07-.15-.67-1.61-.92-2.21-.24-.58-.49-.5-.67-.51H8.1c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.07 2.87 1.21 3.07c.15.2 2.1 3.2 5.08 4.49.71.31 1.26.49 1.69.63.71.23 1.36.2 1.87.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.41-.07-.12-.27-.2-.57-.35m-5.42 7.4h-.01a9.87 9.87 0 01-5.03-1.38l-.36-.21-3.74.98 1-3.65-.24-.37A9.86 9.86 0 012.06 12C2.06 6.5 6.5 2.06 12 2.06S21.94 6.5 21.94 12 17.5 21.94 12 21.94m8.41-18.3A11.82 11.82 0 0012.05 0C5.5 0 .16 5.34.16 11.89c0 2.1.55 4.14 1.59 5.95L.06 24l6.3-1.65a11.88 11.88 0 005.68 1.45h.01c6.55 0 11.89-5.34 11.89-11.89 0-3.18-1.24-6.16-3.48-8.41"/></svg>
-      Escribir por WhatsApp
-    </a>
-    <a class="pf-cat" href="catalogo.php">Ver todo el catálogo &rarr;</a>
+    <p>Stock real. Precio directo. Respuesta en minutos. Elegí cómo seguir:</p>
+    <div class="pf-actions">
+      <a class="pf-btn wa" href="<?=$WA?>" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24"><path d="M17.47 14.38c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.94 1.16-.17.2-.35.22-.64.08-.3-.15-1.26-.46-2.39-1.48-.88-.79-1.48-1.76-1.65-2.06-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.03-.52-.07-.15-.67-1.61-.92-2.21-.24-.58-.49-.5-.67-.51H8.1c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.07 2.87 1.21 3.07c.15.2 2.1 3.2 5.08 4.49.71.31 1.26.49 1.69.63.71.23 1.36.2 1.87.12.57-.09 1.76-.72 2.01-1.41.25-.7.25-1.29.17-1.41-.07-.12-.27-.2-.57-.35m-5.42 7.4h-.01a9.87 9.87 0 01-5.03-1.38l-.36-.21-3.74.98 1-3.65-.24-.37A9.86 9.86 0 012.06 12C2.06 6.5 6.5 2.06 12 2.06S21.94 6.5 21.94 12 17.5 21.94 12 21.94m8.41-18.3A11.82 11.82 0 0012.05 0C5.5 0 .16 5.34.16 11.89c0 2.1.55 4.14 1.59 5.95L.06 24l6.3-1.65a11.88 11.88 0 005.68 1.45h.01c6.55 0 11.89-5.34 11.89-11.89 0-3.18-1.24-6.16-3.48-8.41"/></svg>
+        Escribir por WhatsApp
+      </a>
+      <a class="pf-btn cat" href="catalogo.php">
+        <svg viewBox="0 0 24 24"><path d="M3 5h18M3 12h18M3 19h18" stroke-linecap="round"/></svg>
+        Ver catálogo
+      </a>
+      <a class="pf-btn asesor" href="asesor.php">
+        <span class="pf-new">nuevo</span>
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M12 14c-4 0-7 2-7 5v1h14v-1c0-3-3-5-7-5z"/><path d="M8 18l1 2M16 18l-1 2" stroke-linecap="round"/></svg>
+        Asesor virtual
+      </a>
+    </div>
+    <p class="pf-note">
+      <strong>Atención humana por WhatsApp</strong> o probá nuestro asesor virtual que te ayuda a elegir según tu presupuesto.
+    </p>
   </div>
 </div>
 

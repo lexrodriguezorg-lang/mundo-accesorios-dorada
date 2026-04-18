@@ -52,13 +52,27 @@ foreach($CATS as $cfg){
         });
     }
 
-    // Recoger todos con foto
+    // Recoger todos con foto (arrastramos "destacado" para priorizar)
     $all=[];
     foreach($prods as $p){
         $f=foto($p['id'],1); if(!$f) continue;
-        $all[]=['id'=>$p['id'],'nombre'=>$p['nombre'],'precio'=>$p['precio'],'foto'=>$f];
+        $all[]=[
+            'id'=>$p['id'],
+            'nombre'=>$p['nombre'],
+            'precio'=>$p['precio'],
+            'foto'=>$f,
+            'destacado'=>!empty($p['destacado']),
+        ];
     }
     if(count($all)<2) continue;
+
+    // Variedad por visita: destacados primero, luego el resto aleatorio.
+    // Así la primera tanda muestra lo mejor y en cada recarga aparece una mezcla distinta.
+    $destacados=array_values(array_filter($all, fn($i)=>$i['destacado']));
+    $resto     =array_values(array_filter($all, fn($i)=>!$i['destacado']));
+    shuffle($destacados);
+    shuffle($resto);
+    $all=array_merge($destacados,$resto);
 
     // Dividir en tandas — cada tanda tiene su propia paleta
     $batches=array_chunk($all,$BATCH);
@@ -267,7 +281,7 @@ html,body{height:100%;overflow:hidden;background:#000;font-family:'DM Sans',sans
 <body>
 <div id="feed">
 <?php foreach($cats_data as $ci=>$cat): ?>
-<div class="cat-slide" id="cat-<?=$ci?>">
+<div class="cat-slide" id="cat-<?=$ci?>" style="transform:translateY(<?=($ci-$startCat)*100?>dvh)">
   <div class="prod-track" id="track-<?=$ci?>">
   <?php foreach($cat['items'] as $pi=>$p):
     $wa=urlencode('Hola linda 🌸 me interesa: '.$p['nombre'].' — '.pf($p['precio']).' ¿está disponible?');
