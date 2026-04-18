@@ -8,6 +8,8 @@ define('MAX_MB',    8);
 define('MAX_SLOTS', 6);
 define('DATA',      __DIR__ . '/catalogo.json');
 
+require_once __DIR__ . '/afiliados_lib.php';
+
 // ── Usuarios del panel ───────────────────────────────────────
 // admin: control total · vendedora: solo auditoría/inventario del local
 const USUARIOS = [
@@ -315,6 +317,181 @@ if ($auth && $action === 'home_secciones') {
     $d2['home_secciones'] = $valid;
     $ok = writeData($d2);
     echo json_encode(['ok'=>$ok,'n'=>count($valid)]);
+    exit;
+}
+
+// ── AFILIADAS · endpoints ────────────────────────────────────
+// Solo admin puede gestionar afiliadas
+if ($auth && $esAdmin && $action === 'afil_list') {
+    header('Content-Type: application/json');
+    $d = afil_read();
+    $rows = [];
+    foreach ($d['afiliadas'] as $a) {
+        $ventas_n  = count($a['ventas'] ?? []);
+        $ventas_m  = array_sum(array_map(fn($v)=>intval($v['monto'] ?? 0), $a['ventas'] ?? []));
+        $com_tot   = array_sum(array_map(fn($v)=>intval($v['comision'] ?? 0), $a['ventas'] ?? []));
+        $com_pend  = array_sum(array_map(fn($v)=>empty($v['pagada'])?intval($v['comision']??0):0, $a['ventas'] ?? []));
+        $rows[] = [
+            'user'            => $a['user']   ?? '',
+            'nombre'          => $a['nombre'] ?? '',
+            'codigo'          => $a['codigo'] ?? '',
+            'activa'          => !empty($a['activa']),
+            'tipo_comision'   => $a['tipo_comision'] ?? 'porcentaje',
+            'valor_comision'  => floatval($a['valor_comision'] ?? 0),
+            'producto_comision' => $a['producto_comision'] ?? null,
+            'wa_telefono'     => $a['wa_telefono'] ?? '',
+            'mensaje_agente'  => $a['mensaje_agente'] ?? '',
+            'creada'          => $a['creada'] ?? '',
+            'clics_total'     => intval($a['clics_total'] ?? 0),
+            'ventas_n'        => $ventas_n,
+            'ventas_monto'    => $ventas_m,
+            'comision_total'  => $com_tot,
+            'comision_pend'   => $com_pend,
+        ];
+    }
+    usort($rows, fn($a,$b)=>strcmp($a['user'], $b['user']));
+    echo json_encode(['ok'=>true,'rows'=>$rows,'plantilla_default'=>afil_default_plantilla()]);
+    exit;
+}
+
+if ($auth && $esAdmin && $action === 'afil_get') {
+    header('Content-Type: application/json');
+    $u = trim($_GET['user'] ?? '');
+    $a = afil_find_user($u);
+    if (!$a) die(json_encode(['ok'=>false,'msg'=>'No existe']));
+    unset($a['clave_hash']);
+    echo json_encode(['ok'=>true,'afil'=>$a]);
+    exit;
+}
+
+if ($auth && $esAdmin && $action === 'afil_save') {
+    header('Content-Type: application/json');
+    $original = trim($_POST['original_user'] ?? ''); // si venía vacío es alta nueva
+    $u        = trim($_POST['user'] ?? '');
+    $nombre   = trim($_POST['nombre'] ?? '');
+    $codigo   = afil_normalize_codigo($_POST['codigo'] ?? '');
+    $clave    = (string)($_POST['clave'] ?? '');
+    $tipo     = in_array($_POST['tipo_comision'] ?? 'porcentaje', ['porcentaje','fijo','producto']) ? $_POST['tipo_comision'] : 'porcentaje';
+    $valor    = floatval($_POST['valor_comision'] ?? 0);
+    $prodCom  = intval($_POST['producto_comision'] ?? 0) ?: null;
+    $activa   = ($_POST['activa'] ?? '1') === '1';
+    $telef    = trim($_POST['wa_telefono'] ?? '');
+    $msgAg    = trim($_POST['mensaje_agente'] ?? '');
+
+    if ($u === '' || !preg_match('/^[a-z0-9_.-]{3,24}$/i', $u))
+        die(json_encode(['ok'=>false,'msg'=>'Usuario inválido (3-24 caracteres alfanuméricos)']));
+    if ($nombre === '')   die(json_encode(['ok'=>false,'msg'=>'Nombre requerido']));
+    if ($codigo === '')   $codigo = afil_gen_codigo($nombre);
+
+    $data = afil_read();
+
+    // Verificar unicidad de código en otros registros
+    foreach ($data['afiliadas'] as $other) {
+        if (strtoupper($other['codigo'] ?? '') === $codigo && ($other['user'] ?? '') !== $original) {
+            die(json_encode(['ok'=>false,'msg'=>'Ese código ya lo tiene otra afiliada']));
+        }
+    }
+
+    if ($original === '') {
+        // Alta
+        if (afil_idx_user($data, $u) >= 0) die(json_encode(['ok'=>false,'msg'=>'Ese usuario ya existe']));
+        if (strlen($clave) < 6) die(json_encode(['ok'=>false,'msg'=>'Clave requerida (mín 6)']));
+        $data['afiliadas'][] = [
+            'user'              => $u,
+            'clave_hash'        => password_hash($clave, PASSWORD_DEFAULT),
+            'nombre'            => $nombre,
+            'codigo'            => $codigo,
+            'tipo_comision'     => $tipo,
+            'valor_comision'    => $valor,
+            'producto_comision' => $prodCom,
+            'activa'            => $activa,
+            'creada'            => date('Y-m-d'),
+            'mensaje_agente'    => $msgAg ?: afil_default_plantilla(),
+            'wa_telefono'       => $telef,
+            'clics_total'       => 0,
+            'clics_recientes'   => [],
+            'ventas'            => [],
+        ];
+    } else {
+        // Edición
+        $i = afil_idx_user($data, $original);
+        if ($i < 0) die(json_encode(['ok'=>false,'msg'=>'No existe']));
+        // si cambió el usuario, validar
+        if ($u !== $original && afil_idx_user($data, $u) >= 0)
+            die(json_encode(['ok'=>false,'msg'=>'Ese usuario ya lo tiene otra afiliada']));
+        $a = &$data['afiliadas'][$i];
+        $a['user']              = $u;
+        $a['nombre']            = $nombre;
+        $a['codigo']            = $codigo;
+        $a['tipo_comision']     = $tipo;
+        $a['valor_comision']    = $valor;
+        $a['producto_comision'] = $prodCom;
+        $a['activa']            = $activa;
+        $a['wa_telefono']       = $telef;
+        $a['mensaje_agente']    = $msgAg ?: afil_default_plantilla();
+        if ($clave !== '') {
+            if (strlen($clave) < 6) die(json_encode(['ok'=>false,'msg'=>'La clave debe tener mín 6 caracteres']));
+            $a['clave_hash'] = password_hash($clave, PASSWORD_DEFAULT);
+        }
+    }
+    echo json_encode(['ok'=>afil_write($data)]);
+    exit;
+}
+
+if ($auth && $esAdmin && $action === 'afil_del') {
+    header('Content-Type: application/json');
+    $u = trim($_POST['user'] ?? '');
+    $data = afil_read();
+    $i = afil_idx_user($data, $u);
+    if ($i < 0) die(json_encode(['ok'=>false]));
+    array_splice($data['afiliadas'], $i, 1);
+    echo json_encode(['ok'=>afil_write($data)]);
+    exit;
+}
+
+if ($auth && $esAdmin && $action === 'afil_add_venta') {
+    header('Content-Type: application/json');
+    $u       = trim($_POST['user'] ?? '');
+    $prod    = intval($_POST['prod_id'] ?? 0);
+    $monto   = max(0, intval($_POST['monto'] ?? 0));
+    $nota    = trim($_POST['nota'] ?? '');
+    $pagada  = ($_POST['pagada'] ?? '0') === '1';
+    $data = afil_read();
+    $i = afil_idx_user($data, $u);
+    if ($i < 0) die(json_encode(['ok'=>false,'msg'=>'No existe']));
+    $a = &$data['afiliadas'][$i];
+    $comision = afil_comision_calc($a, $monto, $prod);
+    $a['ventas'][] = [
+        't'        => date('c'),
+        'prod_id'  => $prod,
+        'monto'    => $monto,
+        'comision' => $comision,
+        'pagada'   => $pagada,
+        'nota'     => $nota,
+    ];
+    echo json_encode(['ok'=>afil_write($data),'comision'=>$comision]);
+    exit;
+}
+
+if ($auth && $esAdmin && $action === 'afil_toggle_pago') {
+    header('Content-Type: application/json');
+    $u   = trim($_POST['user'] ?? '');
+    $idx = intval($_POST['idx'] ?? -1);
+    $data = afil_read();
+    $i = afil_idx_user($data, $u);
+    if ($i < 0 || !isset($data['afiliadas'][$i]['ventas'][$idx])) die(json_encode(['ok'=>false]));
+    $v = &$data['afiliadas'][$i]['ventas'][$idx];
+    $v['pagada'] = empty($v['pagada']);
+    echo json_encode(['ok'=>afil_write($data),'pagada'=>$v['pagada']]);
+    exit;
+}
+
+if ($auth && $esAdmin && $action === 'afil_ventas') {
+    header('Content-Type: application/json');
+    $u = trim($_GET['user'] ?? '');
+    $a = afil_find_user($u);
+    if (!$a) die(json_encode(['ok'=>false]));
+    echo json_encode(['ok'=>true,'ventas'=>$a['ventas'] ?? [],'clics'=>array_slice(array_reverse($a['clics_recientes']??[]),0,40)]);
     exit;
 }
 
@@ -677,6 +854,65 @@ body{font-family:"Poppins",sans-serif;background:var(--bg);color:var(--txt);min-
   .aud-table tbody td:nth-child(2){display:none}
   .aud-table td,.aud-table th{padding:7px 8px;font-size:11px}
 }
+
+/* ── AFILIADAS (reutiliza estilos aud-*) ──────────────────── */
+.afil-back{position:fixed;inset:0;background:rgba(9,16,31,.55);z-index:520;display:none;align-items:flex-start;justify-content:center;padding:24px;overflow-y:auto}
+.afil-back.show{display:flex}
+.afil-modal{background:#fff;border-radius:16px;width:100%;max-width:1300px;box-shadow:0 30px 80px rgba(0,0,0,.35);overflow:hidden;display:flex;flex-direction:column;max-height:calc(100vh - 48px)}
+.afil-hdr{background:linear-gradient(135deg,#B5179E,#7209B7);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.afil-hdr h2{font-family:"Bebas Neue";font-size:22px;letter-spacing:2px}
+.afil-hdr .sub{font-size:11px;color:rgba(255,255,255,.8);margin-top:2px}
+.afil-body{flex:1;overflow-y:auto;background:#F8F3FF;padding:18px 20px}
+.afil-tools{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.afil-btn{padding:9px 16px;border-radius:10px;background:linear-gradient(135deg,#B5179E,#7209B7);border:none;color:#fff;font-family:"Poppins";font-size:12px;font-weight:600;cursor:pointer}
+.afil-btn:hover{opacity:.9}
+.afil-btn.sec{background:#fff;color:var(--vi);border:1.5px solid var(--bd)}
+.afil-btn.sec:hover{background:#F0EEFF}
+.afil-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.afil-card{background:#fff;border:1.5px solid var(--bd);border-radius:12px;padding:14px 16px;position:relative}
+.afil-card.inactiva{opacity:.55}
+.afil-card h3{font-size:14px;font-weight:700;color:var(--txt);margin-bottom:2px}
+.afil-card .user{font-family:"Space Mono";font-size:10px;color:var(--mu)}
+.afil-card .codigo{display:inline-block;font-family:"Space Mono";font-size:10px;font-weight:700;background:linear-gradient(135deg,#F72585,#B5179E);color:#fff;padding:2px 8px;border-radius:50px;margin:7px 0}
+.afil-card .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0;padding:10px 0;border-top:1px solid var(--bd);border-bottom:1px solid var(--bd)}
+.afil-card .met{text-align:center}
+.afil-card .met .n{font-family:"Bebas Neue";font-size:20px;color:var(--fu);line-height:1}
+.afil-card .met .l{font-size:8px;color:var(--mu);text-transform:uppercase;letter-spacing:.05em;margin-top:2px}
+.afil-card .comis{font-size:11px;color:var(--mu);margin-bottom:10px}
+.afil-card .comis strong{color:var(--ok);font-weight:600}
+.afil-card .comis .pen{color:var(--warn);font-weight:600}
+.afil-card .acts{display:flex;gap:6px;flex-wrap:wrap}
+.afil-card .acts button{flex:1;min-width:70px;padding:5px 8px;border-radius:6px;border:1px solid var(--bd);background:#fff;font-family:"Poppins";font-size:10px;font-weight:600;cursor:pointer;color:var(--vi);transition:.15s}
+.afil-card .acts button:hover{background:#F0EEFF;border-color:var(--vi)}
+.afil-card .acts .del{color:var(--err);border-color:rgba(212,35,86,.25)}
+.afil-card .acts .del:hover{background:var(--err);color:#fff;border-color:var(--err)}
+.afil-empty{padding:40px 20px;text-align:center;color:var(--mu);font-size:13px;background:#fff;border-radius:12px;border:1.5px dashed var(--bd)}
+
+/* FORM MODAL */
+.afil-form-back{position:fixed;inset:0;background:rgba(9,16,31,.6);z-index:540;display:none;align-items:center;justify-content:center;padding:16px}
+.afil-form-back.show{display:flex}
+.afil-form{background:#fff;border-radius:16px;width:100%;max-width:640px;max-height:calc(100vh - 32px);overflow:hidden;display:flex;flex-direction:column;box-shadow:0 30px 80px rgba(0,0,0,.35)}
+.afil-form-hdr{background:linear-gradient(135deg,#B5179E,#7209B7);color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}
+.afil-form-hdr h3{font-size:15px;font-weight:700}
+.afil-form-body{padding:18px;overflow-y:auto;flex:1}
+.afil-form-body .g{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.afil-form-body .g.full{grid-template-columns:1fr}
+.afil-form-body label{display:block;font-size:10px;font-weight:600;color:var(--mu);letter-spacing:.04em;text-transform:uppercase;margin-bottom:4px}
+.afil-form-body input,.afil-form-body select,.afil-form-body textarea{width:100%;border:1.5px solid var(--bd);border-radius:8px;padding:9px 12px;font-family:"Poppins";font-size:12px;outline:none;background:#fff;color:var(--txt)}
+.afil-form-body textarea{resize:vertical;min-height:100px;font-size:12px;line-height:1.5}
+.afil-form-body input:focus,.afil-form-body select:focus,.afil-form-body textarea:focus{border-color:var(--fu)}
+.afil-form-body .hint{font-size:10px;color:var(--mu);margin-top:4px;line-height:1.5}
+.afil-form-body .hint code{background:#F0EEFF;color:var(--fu);padding:1px 5px;border-radius:3px;font-family:"Space Mono";font-size:10px}
+.afil-form-foot{display:flex;gap:10px;justify-content:flex-end;padding:12px 18px;border-top:1px solid var(--bd);background:#F8F3FF}
+.afil-form-foot .spacer{flex:1}
+.afil-msg{background:#FDF0F6;color:#A01050;border:1px solid #F5C2D8;border-radius:8px;padding:8px 12px;font-size:11px;margin-bottom:10px;display:none}
+.afil-msg.show{display:block}
+.afil-msg.ok{background:#EFF9F4;color:#067050;border-color:#B7E5D2}
+@media(max-width:600px){
+  .afil-back,.afil-form-back{padding:0}
+  .afil-modal,.afil-form{border-radius:0;max-height:100vh;height:100vh;max-width:100%}
+  .afil-form-body .g{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
@@ -712,6 +948,9 @@ body{font-family:"Poppins",sans-serif;background:var(--bg);color:var(--txt);min-
       <?= htmlspecialchars(USUARIOS[$user]['nombre'] ?? $user) ?> · <?= htmlspecialchars($rol) ?>
     </span>
     <button class="hbtn w" onclick="abrirAuditoria()" title="Auditoría de inventario">Auditoría</button>
+    <?php if ($esAdmin): ?>
+    <button class="hbtn w" onclick="abrirAfil()" title="Gestión de afiliadas">Afiliadas</button>
+    <?php endif ?>
     <a class="hbtn" href="index.php" target="_blank">Ver sitio</a>
     <button class="hbtn w" onclick="location.reload()">Actualizar</button>
     <a class="hbtn" href="?salir=1">Salir</a>
@@ -809,6 +1048,110 @@ body{font-family:"Poppins",sans-serif;background:var(--bg);color:var(--txt);min-
     </div>
   </div>
 </div>
+
+<!-- ── MODAL AFILIADAS ──────────────────────────────────────── -->
+<?php if ($esAdmin): ?>
+<div class="afil-back" id="afilBack" onclick="if(event.target===this)cerrarAfil()">
+  <div class="afil-modal">
+    <div class="afil-hdr">
+      <div>
+        <h2>Afiliadas y comisiones</h2>
+        <div class="sub">Crear, gestionar y ver el rendimiento de cada vendedora con referidos</div>
+      </div>
+      <button class="aud-close" onclick="cerrarAfil()" title="Cerrar (Esc)">&#10005;</button>
+    </div>
+    <div class="afil-body">
+      <div class="afil-tools">
+        <button class="afil-btn" onclick="afilAbrirForm()">+ Nueva afiliada</button>
+        <button class="afil-btn sec" onclick="afilCargar()">Actualizar</button>
+      </div>
+      <div id="afilGrid"><div class="afil-empty">Cargando...</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Form crear/editar afiliada -->
+<div class="afil-form-back" id="afilFormBack" onclick="if(event.target===this)afilCerrarForm()">
+  <div class="afil-form">
+    <div class="afil-form-hdr">
+      <h3 id="afilFormTitulo">Nueva afiliada</h3>
+      <button class="aud-close" onclick="afilCerrarForm()">&#10005;</button>
+    </div>
+    <div class="afil-form-body">
+      <div class="afil-msg" id="afilFormMsg"></div>
+      <input type="hidden" id="afilOriginalUser" value="">
+      <div class="g">
+        <div>
+          <label>Usuario (login)</label>
+          <input type="text" id="afilUser" placeholder="maria" autocomplete="off">
+        </div>
+        <div>
+          <label>Nombre completo</label>
+          <input type="text" id="afilNombre" placeholder="María López">
+        </div>
+      </div>
+      <div class="g">
+        <div>
+          <label>Código de referido</label>
+          <input type="text" id="afilCodigo" placeholder="Se genera si lo dejás vacío" maxlength="24">
+          <div class="hint">Letras, números, <code>_</code> o <code>-</code>. Link: <code>/?ref=CODIGO</code></div>
+        </div>
+        <div>
+          <label>WhatsApp (opcional)</label>
+          <input type="text" id="afilWa" placeholder="573001234567">
+        </div>
+      </div>
+      <div class="g">
+        <div>
+          <label>Clave <span style="color:var(--mu);text-transform:none;font-size:9px">(dejá vacío al editar para mantenerla)</span></label>
+          <input type="text" id="afilClave" placeholder="mín 6 caracteres">
+        </div>
+        <div>
+          <label>Estado</label>
+          <select id="afilActiva">
+            <option value="1">Activa</option>
+            <option value="0">Desactivada</option>
+          </select>
+        </div>
+      </div>
+      <div class="g">
+        <div>
+          <label>Tipo de comisión</label>
+          <select id="afilTipo" onchange="afilToggleTipo()">
+            <option value="porcentaje">Porcentaje de la venta</option>
+            <option value="fijo">Monto fijo por venta</option>
+            <option value="producto">Producto específico</option>
+          </select>
+        </div>
+        <div>
+          <label id="afilValorLabel">Valor (%)</label>
+          <input type="number" id="afilValor" step="0.1" min="0" placeholder="10">
+        </div>
+      </div>
+      <div class="g full" id="afilProdWrap" style="display:none">
+        <div>
+          <label>ID del producto como comisión</label>
+          <input type="number" id="afilProdCom" placeholder="1234">
+          <div class="hint">El producto que se le dará como comisión a la afiliada por cada venta.</div>
+        </div>
+      </div>
+      <div class="g full">
+        <div>
+          <label>Mensaje del agente · plantilla personalizada</label>
+          <textarea id="afilMsg" placeholder="Dejá vacío para usar la plantilla por defecto"></textarea>
+          <div class="hint">Variables: <code>{afil_nombre}</code>, <code>{afil_codigo}</code>, <code>{producto_nombre}</code>, <code>{producto_precio}</code>, <code>{producto_link}</code>, <code>{link_home}</code>, <code>{link_catalogo}</code></div>
+        </div>
+      </div>
+    </div>
+    <div class="afil-form-foot">
+      <button class="afil-btn sec del" id="afilFormDel" onclick="afilEliminar()" style="color:var(--err);border-color:rgba(212,35,86,.3);display:none">Eliminar</button>
+      <div class="spacer"></div>
+      <button class="afil-btn sec" onclick="afilCerrarForm()">Cancelar</button>
+      <button class="afil-btn" onclick="afilGuardar()">Guardar</button>
+    </div>
+  </div>
+</div>
+<?php endif ?>
 
 <script>
 // ── ESTADO ───────────────────────────────────────────────────
@@ -1686,6 +2029,203 @@ function audFiltrar() {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && document.getElementById('audBack').classList.contains('show')) cerrarAuditoria();
 });
+
+<?php if ($esAdmin): ?>
+// ── AFILIADAS ────────────────────────────────────────────────
+var afilData = null;
+var afilPlantillaDefault = '';
+
+function abrirAfil(){
+  document.getElementById('afilBack').classList.add('show');
+  document.body.style.overflow='hidden';
+  if (!afilData) afilCargar();
+}
+function cerrarAfil(){
+  document.getElementById('afilBack').classList.remove('show');
+  if (!document.getElementById('audBack').classList.contains('show')) document.body.style.overflow='';
+}
+async function afilCargar(){
+  const grid = document.getElementById('afilGrid');
+  grid.innerHTML = '<div class="afil-empty">Cargando...</div>';
+  try{
+    const d = await fetch('admin.php?action=afil_list').then(r=>r.json());
+    if (!d.ok) throw new Error();
+    afilData = d.rows;
+    afilPlantillaDefault = d.plantilla_default || '';
+    afilPintar();
+  }catch{
+    grid.innerHTML = '<div class="afil-empty" style="color:var(--err)">Error cargando afiliadas</div>';
+  }
+}
+function afilPintar(){
+  const grid = document.getElementById('afilGrid');
+  if (!afilData.length){
+    grid.innerHTML = '<div class="afil-empty"><h3 style="font-size:15px;color:var(--vi);margin-bottom:6px">Sin afiliadas todavía</h3><p>Creá la primera afiliada para empezar a medir clics, ventas y comisiones.</p></div>';
+    return;
+  }
+  grid.innerHTML = '<div class="afil-grid">' + afilData.map(a => `
+    <div class="afil-card ${a.activa?'':'inactiva'}">
+      <h3>${escapeHtml(a.nombre)}</h3>
+      <div class="user">@${escapeHtml(a.user)} · ${a.activa?'activa':'desactivada'}</div>
+      <span class="codigo">${escapeHtml(a.codigo)}</span>
+      <div class="metrics">
+        <div class="met"><div class="n">${a.clics_total}</div><div class="l">clics</div></div>
+        <div class="met"><div class="n">${a.ventas_n}</div><div class="l">ventas</div></div>
+        <div class="met"><div class="n">${fmtM(a.ventas_monto)}</div><div class="l">monto</div></div>
+      </div>
+      <div class="comis">
+        Comisión: ${afilTipoLabel(a.tipo_comision, a.valor_comision)}<br>
+        <strong>${fmtCop(a.comision_total - a.comision_pend)}</strong> pagada · <span class="pen">${fmtCop(a.comision_pend)}</span> pendiente
+      </div>
+      <div class="acts">
+        <button onclick="afilEditar('${a.user.replace(/'/g,"\\'")}')">Editar</button>
+        <button onclick="afilVerVentas('${a.user.replace(/'/g,"\\'")}')">Ventas</button>
+        <button onclick="afilAgregarVenta('${a.user.replace(/'/g,"\\'")}')">+ venta</button>
+        <button class="del" onclick="afilEliminarDirecto('${a.user.replace(/'/g,"\\'")}')">Quitar</button>
+      </div>
+    </div>
+  `).join('') + '</div>';
+}
+function afilTipoLabel(tipo, val){
+  if (tipo === 'porcentaje') return `<strong>${val}%</strong> por venta`;
+  if (tipo === 'fijo')       return `<strong>${fmtCop(val)}</strong> fijo por venta`;
+  if (tipo === 'producto')   return `producto específico`;
+  return tipo;
+}
+function fmtM(n){ if (n>=1000000) return (n/1000000).toFixed(1)+'M'; if (n>=1000) return (n/1000).toFixed(0)+'k'; return n; }
+function fmtCop(n){ return '$' + Number(n||0).toLocaleString('es-CO'); }
+function escapeHtml(s){ return String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function afilAbrirForm(){
+  document.getElementById('afilFormTitulo').textContent = 'Nueva afiliada';
+  document.getElementById('afilOriginalUser').value = '';
+  document.getElementById('afilUser').value = '';
+  document.getElementById('afilNombre').value = '';
+  document.getElementById('afilCodigo').value = '';
+  document.getElementById('afilWa').value = '';
+  document.getElementById('afilClave').value = '';
+  document.getElementById('afilActiva').value = '1';
+  document.getElementById('afilTipo').value = 'porcentaje';
+  document.getElementById('afilValor').value = '10';
+  document.getElementById('afilProdCom').value = '';
+  document.getElementById('afilMsg').value = afilPlantillaDefault;
+  document.getElementById('afilFormDel').style.display = 'none';
+  document.getElementById('afilFormMsg').classList.remove('show','ok');
+  afilToggleTipo();
+  document.getElementById('afilFormBack').classList.add('show');
+  document.getElementById('afilUser').focus();
+}
+function afilCerrarForm(){
+  document.getElementById('afilFormBack').classList.remove('show');
+}
+function afilToggleTipo(){
+  const t = document.getElementById('afilTipo').value;
+  const lbl = document.getElementById('afilValorLabel');
+  const prodWrap = document.getElementById('afilProdWrap');
+  if (t === 'porcentaje') { lbl.textContent = 'Valor (%)'; prodWrap.style.display = 'none'; }
+  else if (t === 'fijo')  { lbl.textContent = 'Monto fijo (COP)'; prodWrap.style.display = 'none'; }
+  else                    { lbl.textContent = 'Valor (no aplica)'; prodWrap.style.display = ''; }
+}
+async function afilEditar(user){
+  try{
+    const d = await fetch('admin.php?action=afil_get&user=' + encodeURIComponent(user)).then(r=>r.json());
+    if (!d.ok) { toast('No se pudo cargar','err'); return; }
+    const a = d.afil;
+    document.getElementById('afilFormTitulo').textContent = 'Editar · ' + a.nombre;
+    document.getElementById('afilOriginalUser').value = a.user;
+    document.getElementById('afilUser').value = a.user;
+    document.getElementById('afilNombre').value = a.nombre || '';
+    document.getElementById('afilCodigo').value = a.codigo || '';
+    document.getElementById('afilWa').value = a.wa_telefono || '';
+    document.getElementById('afilClave').value = '';
+    document.getElementById('afilActiva').value = a.activa ? '1' : '0';
+    document.getElementById('afilTipo').value = a.tipo_comision || 'porcentaje';
+    document.getElementById('afilValor').value = a.valor_comision || 0;
+    document.getElementById('afilProdCom').value = a.producto_comision || '';
+    document.getElementById('afilMsg').value = a.mensaje_agente || afilPlantillaDefault;
+    document.getElementById('afilFormDel').style.display = '';
+    document.getElementById('afilFormMsg').classList.remove('show','ok');
+    afilToggleTipo();
+    document.getElementById('afilFormBack').classList.add('show');
+  }catch{ toast('Error','err'); }
+}
+async function afilGuardar(){
+  const fd = new FormData();
+  fd.append('original_user',    document.getElementById('afilOriginalUser').value);
+  fd.append('user',             document.getElementById('afilUser').value.trim());
+  fd.append('nombre',           document.getElementById('afilNombre').value.trim());
+  fd.append('codigo',           document.getElementById('afilCodigo').value.trim());
+  fd.append('wa_telefono',      document.getElementById('afilWa').value.trim());
+  fd.append('clave',            document.getElementById('afilClave').value);
+  fd.append('activa',           document.getElementById('afilActiva').value);
+  fd.append('tipo_comision',    document.getElementById('afilTipo').value);
+  fd.append('valor_comision',   document.getElementById('afilValor').value);
+  fd.append('producto_comision',document.getElementById('afilProdCom').value);
+  fd.append('mensaje_agente',   document.getElementById('afilMsg').value);
+  const msg = document.getElementById('afilFormMsg');
+  msg.classList.remove('show','ok');
+  try{
+    const d = await fetch('admin.php?action=afil_save', {method:'POST',body:fd}).then(r=>r.json());
+    if (!d.ok) { msg.textContent = d.msg || 'Error al guardar'; msg.classList.add('show'); return; }
+    msg.textContent = 'Guardado'; msg.classList.add('show','ok');
+    setTimeout(() => { afilCerrarForm(); afilCargar(); }, 600);
+  }catch{ msg.textContent='Error de conexión'; msg.classList.add('show'); }
+}
+function afilEliminar(){
+  const u = document.getElementById('afilOriginalUser').value;
+  if (!u) return;
+  if (!confirm('Eliminar esta afiliada? Se perderá su historial de clics y ventas.')) return;
+  afilEliminarRequest(u);
+}
+function afilEliminarDirecto(user){
+  if (!confirm('Eliminar afiliada "'+user+'"? Se perderá su historial.')) return;
+  afilEliminarRequest(user);
+}
+async function afilEliminarRequest(user){
+  const fd = new FormData(); fd.append('user', user);
+  const d = await fetch('admin.php?action=afil_del', {method:'POST',body:fd}).then(r=>r.json()).catch(()=>({ok:false}));
+  if (d.ok){ toast('Afiliada eliminada','suc'); afilCerrarForm(); afilCargar(); }
+  else toast('No se pudo eliminar','err');
+}
+async function afilAgregarVenta(user){
+  const prod  = prompt('ID del producto vendido:');
+  if (!prod) return;
+  const monto = prompt('Monto de la venta (COP, solo números):', '0');
+  if (monto === null) return;
+  const nota  = prompt('Nota opcional (cliente, detalle...):', '') || '';
+  const pagada = confirm('¿La comisión ya fue pagada a la afiliada?') ? '1' : '0';
+  const fd = new FormData();
+  fd.append('user', user); fd.append('prod_id', prod); fd.append('monto', monto);
+  fd.append('nota', nota); fd.append('pagada', pagada);
+  const d = await fetch('admin.php?action=afil_add_venta', {method:'POST',body:fd}).then(r=>r.json()).catch(()=>({ok:false}));
+  if (d.ok){ toast('Venta registrada · comisión '+fmtCop(d.comision),'suc'); afilCargar(); }
+  else toast(d.msg||'Error','err');
+}
+async function afilVerVentas(user){
+  const d = await fetch('admin.php?action=afil_ventas&user='+encodeURIComponent(user)).then(r=>r.json()).catch(()=>({ok:false}));
+  if (!d.ok) { toast('Error','err'); return; }
+  const rows = d.ventas || [];
+  if (!rows.length) { alert('Esta afiliada aún no tiene ventas registradas.'); return; }
+  const txt = rows.map((v,i) =>
+    `${i+1}. ${new Date(v.t).toLocaleDateString('es-CO')} · Prod #${v.prod_id} · ${fmtCop(v.monto)} → comisión ${fmtCop(v.comision)} ${v.pagada?'✓ pagada':'(pendiente)'}`
+  ).join('\n');
+  if (confirm(txt + '\n\n¿Querés marcar/desmarcar alguna como pagada? (Aceptar = sí)')) {
+    const i = parseInt(prompt('Número de la venta a cambiar estado de pago:','1')) - 1;
+    if (i >= 0 && rows[i]) {
+      const fd = new FormData(); fd.append('user', user); fd.append('idx', i);
+      const r = await fetch('admin.php?action=afil_toggle_pago',{method:'POST',body:fd}).then(r=>r.json()).catch(()=>({ok:false}));
+      if (r.ok) { toast(r.pagada?'Marcada pagada':'Marcada pendiente','suc'); afilCargar(); }
+    }
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape'){
+    if (document.getElementById('afilFormBack').classList.contains('show')) afilCerrarForm();
+    else if (document.getElementById('afilBack').classList.contains('show')) cerrarAfil();
+  }
+});
+<?php endif ?>
 </script>
 <?php endif ?>
 </body>

@@ -1,4 +1,7 @@
 <?php
+require_once __DIR__ . '/afiliados_lib.php';
+afil_handle_incoming_ref();
+
 $WA_BASE = 'https://wa.me/573233453004';
 $data    = file_exists(__DIR__.'/catalogo.json')
            ? json_decode(file_get_contents(__DIR__.'/catalogo.json'),true)

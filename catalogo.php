@@ -1,4 +1,7 @@
 <?php
+require_once __DIR__ . '/afiliados_lib.php';
+afil_handle_incoming_ref();
+
 $data    = file_exists(__DIR__.'/catalogo.json') ? json_decode(file_get_contents(__DIR__.'/catalogo.json'),true) : ['v'=>1,'productos'=>[]];
 $todos   = array_values(array_filter($data['productos']??[], fn($p)=>$p['activo']??false));
 $cat_sel = trim($_GET['cat']??'');
