@@ -495,6 +495,9 @@ function goCategory(i,animate){
   document.getElementById('vdot-'+prev)?.classList.remove('act');
   document.getElementById('vdot-'+i)?.classList.add('act');
   posSlides();
+  // Sincronizar curProds[i] con la posición real del track (por si ya fue visitada)
+  var track=document.getElementById('track-'+i);
+  if(track && track.clientWidth) curProds[i]=Math.round(track.scrollLeft/track.clientWidth);
   videoActivar(i, curProds[i]||0);
   setTimeout(function(){animating=false;},480);
 }

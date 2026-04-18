@@ -1,6 +1,8 @@
 <?php
 require_once __DIR__ . '/../afiliados_lib.php';
 
+// Sesión aislada del admin (no compartir cookie PHPSESSID)
+session_name('afil_sess');
 session_start();
 
 if (($_GET['salir'] ?? '') === '1') {
@@ -15,6 +17,7 @@ if ($_POST && isset($_POST['clave'])) {
     $afil = afil_find_user($u);
     if ($afil && !empty($afil['activa']) && !empty($afil['clave_hash'])
         && password_verify($c, $afil['clave_hash'])) {
+        $_SESSION = [];                  // limpiar cualquier dato previo
         session_regenerate_id(true);
         $_SESSION['afil_ok']   = true;
         $_SESSION['afil_user'] = $afil['user'];

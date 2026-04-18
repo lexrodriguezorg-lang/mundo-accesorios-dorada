@@ -110,7 +110,7 @@ function afil_set_ref_cookie(string $codigo): void {
             'expires'  => time() + AFIL_COOKIE_TTL,
             'path'     => '/',
             'secure'   => !empty($_SERVER['HTTPS']),
-            'httponly' => false,
+            'httponly' => true,
             'samesite' => 'Lax',
         ]);
     }
@@ -121,26 +121,51 @@ function afil_get_ref(): string {
     return afil_normalize_codigo($_COOKIE[AFIL_COOKIE] ?? '');
 }
 
+// Operación atómica: read → modify → write bajo un único flock exclusivo.
+// Evita race conditions cuando varios clicks entran simultáneamente.
+function afil_mutate(callable $fn): bool {
+    $file = AFIL_DATA_FILE;
+    if (!is_dir(dirname($file))) mkdir(dirname($file), 0755, true);
+    $fp = @fopen($file, 'c+');
+    if (!$fp) return false;
+    $ok = false;
+    if (flock($fp, LOCK_EX)) {
+        $content = '';
+        while (!feof($fp)) $content .= fread($fp, 8192);
+        $data = json_decode($content, true);
+        if (!is_array($data)) $data = ['v'=>1,'afiliadas'=>[]];
+        $changed = $fn($data);
+        if ($changed) {
+            ftruncate($fp, 0); rewind($fp);
+            fwrite($fp, json_encode($data, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+            fflush($fp);
+        }
+        $ok = true;
+        flock($fp, LOCK_UN);
+    }
+    fclose($fp);
+    return $ok;
+}
+
 function afil_track_click(string $codigo, string $url = ''): void {
     $codigo = afil_normalize_codigo($codigo);
     if ($codigo === '') return;
-    $data = afil_read();
-    $i = afil_idx_codigo($data, $codigo);
-    if ($i < 0) return;
-    $a = &$data['afiliadas'][$i];
-    if (empty($a['activa'])) return;
-
-    $a['clics_total'] = intval($a['clics_total'] ?? 0) + 1;
-    $rec = $a['clics_recientes'] ?? [];
-    $rec[] = [
-        't'   => date('c'),
-        'url' => substr($url ?: ($_SERVER['REQUEST_URI'] ?? '/'), 0, 240),
-        'ip'  => afil_ip_hash(afil_cliente_ip()),
-        'ref' => substr($_SERVER['HTTP_REFERER'] ?? '', 0, 160),
-    ];
-    if (count($rec) > AFIL_CLICS_MAX) $rec = array_slice($rec, -AFIL_CLICS_MAX);
-    $a['clics_recientes'] = $rec;
-    afil_write($data);
+    $url = $url ?: ($_SERVER['REQUEST_URI'] ?? '/');
+    $ipHash = afil_ip_hash(afil_cliente_ip());
+    $refUrl = substr($_SERVER['HTTP_REFERER'] ?? '', 0, 160);
+    afil_mutate(function(&$data) use ($codigo, $url, $ipHash, $refUrl) {
+        foreach ($data['afiliadas'] as $i => $a) {
+            if (strtoupper($a['codigo'] ?? '') !== $codigo) continue;
+            if (empty($a['activa'])) return false;
+            $data['afiliadas'][$i]['clics_total'] = intval($a['clics_total'] ?? 0) + 1;
+            $rec = $a['clics_recientes'] ?? [];
+            $rec[] = ['t'=>date('c'),'url'=>substr($url,0,240),'ip'=>$ipHash,'ref'=>$refUrl];
+            if (count($rec) > AFIL_CLICS_MAX) $rec = array_slice($rec, -AFIL_CLICS_MAX);
+            $data['afiliadas'][$i]['clics_recientes'] = $rec;
+            return true;
+        }
+        return false;
+    });
 }
 
 // Procesa ?ref=CODIGO — setea cookie, dispara tracking una vez
@@ -150,9 +175,7 @@ function afil_handle_incoming_ref(): void {
     $ref = afil_normalize_codigo($ref);
     if ($ref === '') return;
     if (!afil_find_codigo($ref)) return;
-    $before = afil_get_ref();
     afil_set_ref_cookie($ref);
-    // Siempre registramos el click del link de referido
     afil_track_click($ref, $_SERVER['REQUEST_URI'] ?? '/');
 }
 

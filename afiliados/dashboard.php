@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../afiliados_lib.php';
 
+session_name('afil_sess');
 session_start();
 if (empty($_SESSION['afil_ok']) || empty($_SESSION['afil_user'])) {
     header('Location: login.php'); exit;

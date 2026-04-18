@@ -338,7 +338,7 @@ if ($auth && $action === 'home_secciones') {
 }
 
 // ── UPLOAD VIDEO ──────────────────────────────────────────────
-if ($auth && $action === 'upload_video') {
+if ($auth && $esAdmin && $action === 'upload_video') {
     header('Content-Type: application/json');
     $id   = intval($_GET['id'] ?? 0);
     $file = $_FILES['video'] ?? null;
@@ -370,7 +370,7 @@ if ($auth && $action === 'upload_video') {
 }
 
 // ── BORRAR VIDEO ──────────────────────────────────────────────
-if ($auth && $action === 'delete_video') {
+if ($auth && $esAdmin && $action === 'delete_video') {
     header('Content-Type: application/json');
     $id = intval($_GET['id'] ?? 0);
     $dir = videoDir(); $del = false;
