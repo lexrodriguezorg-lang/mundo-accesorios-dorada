@@ -15,6 +15,12 @@ function foto(int $id, int $slot=1):?string{
             return "/uploads/fotos-productos/{$base}.{$e}";
     return null;
 }
+function video(int $id):?string{
+    foreach(['mp4','webm'] as $e)
+        if(file_exists(__DIR__."/uploads/videos-productos/{$id}.{$e}"))
+            return "/uploads/videos-productos/{$id}.{$e}";
+    return null;
+}
 function pf(int $n):string{ return '$'.number_format($n,0,',','.'); }
 
 // Categorías — SIN vidrios ni protectores
@@ -64,6 +70,7 @@ foreach($CATS as $cfg){
             'nombre'=>$p['nombre'],
             'precio'=>$p['precio'],
             'foto'=>$f,
+            'video'=>video($p['id']),
             'destacado'=>!empty($p['destacado']),
         ];
     }
@@ -150,9 +157,16 @@ html,body{height:100%;overflow:hidden;background:#000;font-family:'DM Sans',sans
 
 /* FONDO */
 .prod-bg{position:absolute;inset:0;z-index:0}
-.prod-bg img{width:100%;height:100%;object-fit:cover;object-position:center top}
+.prod-bg img,.prod-bg video{width:100%;height:100%;object-fit:cover;object-position:center top;display:block}
 .prod-bg::after{content:'';position:absolute;inset:0;
-  background:linear-gradient(to bottom,rgba(0,0,0,.28) 0%,rgba(0,0,0,.0) 28%,rgba(0,0,0,.0) 52%,rgba(0,0,0,.68) 75%,rgba(0,0,0,.9) 100%)}
+  background:linear-gradient(to bottom,rgba(0,0,0,.28) 0%,rgba(0,0,0,.0) 28%,rgba(0,0,0,.0) 52%,rgba(0,0,0,.68) 75%,rgba(0,0,0,.9) 100%);pointer-events:none;z-index:1}
+.video-badge{position:absolute;top:max(env(safe-area-inset-top),14px);left:16px;z-index:21;
+  background:linear-gradient(135deg,#F472B6,#EC4899);color:#fff;font-size:.58rem;font-weight:700;
+  padding:4px 10px;border-radius:50px;letter-spacing:.08em;text-transform:uppercase;
+  box-shadow:0 4px 14px rgba(236,72,153,.4);display:flex;align-items:center;gap:4px;
+  animation:vbPulse 2s ease-in-out infinite}
+.video-badge::before{content:'▶';font-size:.55rem}
+@keyframes vbPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
 
 /* TOP */
 .prod-top{position:absolute;top:0;left:0;right:0;z-index:20;
@@ -290,10 +304,24 @@ html,body{height:100%;overflow:hidden;background:#000;font-family:'DM Sans',sans
     $wa=urlencode('Hola linda 🌸 me interesa: '.$p['nombre'].' — '.pf($p['precio']).' ¿está disponible?');
     $wa_duda=urlencode('Hola linda 🌸 tengo una duda sobre: '.$p['nombre']);
   ?>
-  <div class="prod-slide" id="ps-<?=$ci?>-<?=$pi?>">
+  <div class="prod-slide" id="ps-<?=$ci?>-<?=$pi?>" data-video="<?=$p['video']??''?>">
     <div class="prod-bg">
+      <?php if(!empty($p['video'])): ?>
+      <video
+        class="prod-video"
+        data-src="<?=$p['video']?>"
+        poster="<?=$p['foto']?>"
+        muted playsinline loop webkit-playsinline
+        preload="<?=($ci===0&&$pi===0)?'auto':'none'?>"
+        <?=($ci===0&&$pi===0)?'autoplay':''?>></video>
+      <?php else: ?>
       <img src="<?=$p['foto']?>" alt="<?=htmlspecialchars($p['nombre'])?>" loading="<?=($ci===0&&$pi===0)?'eager':'lazy'?>">
+      <?php endif ?>
     </div>
+
+    <?php if(!empty($p['video'])): ?>
+    <span class="video-badge">Video</span>
+    <?php endif ?>
 
     <!-- TOP -->
     <div class="prod-top">
@@ -427,10 +455,36 @@ function posSlides(animate){
     if(!animate) setTimeout(function(){el.style.transition=''},50);
   }
 }
+
+// ── VIDEO: cargar src lazy y play/pause según slide activo ──
+function videoActivar(ci, pi){
+  // Pausar todos los videos
+  document.querySelectorAll('.prod-video').forEach(function(v){
+    try{ v.pause(); }catch(e){}
+  });
+  // Activar el video del slide actual (si tiene)
+  var slide = document.getElementById('ps-'+ci+'-'+pi);
+  if (!slide) return;
+  var v = slide.querySelector('.prod-video');
+  if (!v) return;
+  if (!v.src && v.dataset.src) v.src = v.dataset.src;
+  v.currentTime = 0;
+  var pl = v.play();
+  if (pl && pl.catch) pl.catch(function(){});
+  // Precargar el siguiente del mismo track
+  var t = document.getElementById('track-'+ci);
+  if (t) {
+    var next = document.getElementById('ps-'+ci+'-'+(pi+1));
+    var nv = next && next.querySelector('.prod-video');
+    if (nv && !nv.src && nv.dataset.src) { nv.preload='metadata'; nv.src=nv.dataset.src; }
+  }
+}
 // Dot inicial correcto
 document.getElementById('vdot-0')?.classList.remove('act');
 document.getElementById('vdot-'+curCat)?.classList.add('act');
 posSlides(false);
+// Activar video del slide inicial
+setTimeout(function(){ videoActivar(curCat, curProds[curCat]||0); }, 120);
 
 function goCategory(i,animate){
   if(i<0||i>=CATS_N||animating) return;
@@ -441,6 +495,7 @@ function goCategory(i,animate){
   document.getElementById('vdot-'+prev)?.classList.remove('act');
   document.getElementById('vdot-'+i)?.classList.add('act');
   posSlides();
+  videoActivar(i, curProds[i]||0);
   setTimeout(function(){animating=false;},480);
 }
 
@@ -482,6 +537,7 @@ document.addEventListener('touchend',function(e){
       document.getElementById('hdot-'+ci+'-'+curProds[ci])?.classList.remove('act');
       document.getElementById('hdot-'+ci+'-'+pi)?.classList.add('act');
       curProds[ci]=pi;
+      if (ci===curCat) videoActivar(ci, pi);
     }
   },{passive:true});
 })();

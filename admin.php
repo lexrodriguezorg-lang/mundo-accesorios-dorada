@@ -4,9 +4,10 @@
 //  Fuente de datos: catalogo.json  (sin MySQL)
 //  admin.php
 // ══════════════════════════════════════════════════════════════
-define('MAX_MB',    8);
-define('MAX_SLOTS', 6);
-define('DATA',      __DIR__ . '/catalogo.json');
+define('MAX_MB',       8);
+define('MAX_SLOTS',    6);
+define('MAX_VIDEO_MB', 50);
+define('DATA',         __DIR__ . '/catalogo.json');
 
 require_once __DIR__ . '/afiliados_lib.php';
 
@@ -79,12 +80,22 @@ function foto_count(int $id): int {
 }
 function tiene(int $id): bool { return url_f($id) !== null; }
 
+// ── Video helpers ─────────────────────────────────────────────
+function videoDir(): string { return __DIR__ . '/uploads/videos-productos/'; }
+function video_url(int $id): ?string {
+    foreach (['mp4','webm'] as $e)
+        if (file_exists(videoDir()."{$id}.{$e}")) return "/uploads/videos-productos/{$id}.{$e}";
+    return null;
+}
+function tiene_video(int $id): bool { return video_url($id) !== null; }
+
 // ── Enriquecer producto con fotos ─────────────────────────────
 function enrichProd(array $p): array {
     $id = $p['id'];
     $p['fotos']   = fotos_prod($id);
     $p['n_fotos'] = foto_count($id);
     $p['tiene']   = tiene($id);
+    $p['video']   = video_url($id);
     return $p;
 }
 
@@ -179,6 +190,12 @@ if ($auth && $action === 'purge') {
             $f = $dir."{$base}.{$e}";
             if (file_exists($f)) unlink($f);
         }
+    }
+    // Borrar video del disco
+    $vdir = videoDir();
+    foreach (['mp4','webm'] as $e) {
+        $f = $vdir."{$id}.{$e}";
+        if (file_exists($f)) unlink($f);
     }
     echo json_encode(['ok'=>writeData($data)]);
     exit;
@@ -317,6 +334,51 @@ if ($auth && $action === 'home_secciones') {
     $d2['home_secciones'] = $valid;
     $ok = writeData($d2);
     echo json_encode(['ok'=>$ok,'n'=>count($valid)]);
+    exit;
+}
+
+// ── UPLOAD VIDEO ──────────────────────────────────────────────
+if ($auth && $action === 'upload_video') {
+    header('Content-Type: application/json');
+    $id   = intval($_GET['id'] ?? 0);
+    $file = $_FILES['video'] ?? null;
+    if (!$id || !$file || $file['error'] !== UPLOAD_ERR_OK)
+        die(json_encode(['ok'=>false,'msg'=>'Error en archivo']));
+    if ($file['size'] > MAX_VIDEO_MB * 1024 * 1024)
+        die(json_encode(['ok'=>false,'msg'=>'Supera '.MAX_VIDEO_MB.'MB']));
+    $mime = mime_content_type($file['tmp_name']);
+    $ext_map = ['video/mp4'=>'mp4','video/webm'=>'webm','video/quicktime'=>'mp4'];
+    if (!isset($ext_map[$mime]))
+        die(json_encode(['ok'=>false,'msg'=>'Solo MP4 o WEBM (detectado: '.$mime.')']));
+    $ext = $ext_map[$mime];
+    $dir = videoDir();
+    if (!is_dir($dir)) mkdir($dir, 0755, true);
+    // Eliminar video anterior si existe (en cualquier extensión)
+    foreach (['mp4','webm'] as $e) {
+        $f = $dir."{$id}.{$e}";
+        if (file_exists($f)) unlink($f);
+    }
+    $dst = $dir."{$id}.{$ext}";
+    if (!move_uploaded_file($file['tmp_name'], $dst))
+        die(json_encode(['ok'=>false,'msg'=>'No se pudo guardar (permisos?)']));
+    echo json_encode([
+        'ok'  => true,
+        'url' => "/uploads/videos-productos/{$id}.{$ext}?v=".time(),
+        'ext' => $ext,
+    ]);
+    exit;
+}
+
+// ── BORRAR VIDEO ──────────────────────────────────────────────
+if ($auth && $action === 'delete_video') {
+    header('Content-Type: application/json');
+    $id = intval($_GET['id'] ?? 0);
+    $dir = videoDir(); $del = false;
+    foreach (['mp4','webm'] as $e) {
+        $f = $dir."{$id}.{$e}";
+        if (file_exists($f)) { unlink($f); $del = true; }
+    }
+    echo json_encode(['ok'=>$del]);
     exit;
 }
 
@@ -735,6 +797,21 @@ body{font-family:"Poppins",sans-serif;background:var(--bg);color:var(--txt);min-
 .pos-inp{width:48px;border:1.5px solid var(--bd);border-radius:6px;padding:3px 6px;font-family:"Space Mono";font-size:10px;text-align:center;outline:none;background:#fff}
 .pos-inp:focus{border-color:var(--fu)}
 .fc-badge{position:absolute;bottom:4px;left:4px;background:rgba(73,33,216,.82);color:#fff;font-family:"Space Mono";font-size:8px;font-weight:700;border-radius:100px;padding:1px 6px;pointer-events:none}
+
+/* ── VIDEO BADGE + PLAYER ── */
+.video-row{display:flex;align-items:center;gap:5px;padding:5px 8px;background:#0E0A1A;color:#fff;flex-wrap:wrap;min-height:30px;border-top:1px solid #E8E0FF}
+.video-row .vlbl{font-size:9px;font-weight:700;color:#F472B6;letter-spacing:.5px;text-transform:uppercase;white-space:nowrap}
+.video-row .vstate{font-size:10px;color:rgba(255,255,255,.6)}
+.video-row .vstate.has{color:#10B981;font-weight:600}
+.video-row .vbtn{margin-left:auto;display:flex;gap:5px}
+.video-row .vbtn button{padding:3px 9px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:#fff;font-family:"Poppins";font-size:9px;font-weight:600;cursor:pointer}
+.video-row .vbtn button:hover{background:rgba(255,255,255,.14)}
+.video-row .vbtn button.prim{background:linear-gradient(135deg,#F472B6,#EC4899);border-color:transparent;color:#fff}
+.video-row .vbtn button.del{color:#FCA5A5;border-color:rgba(239,68,68,.3)}
+.video-row .vbtn button.del:hover{background:#EF4444;color:#fff;border-color:transparent}
+.video-row video{width:34px;height:34px;border-radius:6px;object-fit:cover;border:1px solid rgba(255,255,255,.18);background:#000}
+.video-ribbon{position:absolute;top:6px;left:6px;z-index:3;background:linear-gradient(135deg,#F472B6,#EC4899);color:#fff;font-family:"Poppins";font-size:9px;font-weight:700;padding:2px 8px;border-radius:50px;letter-spacing:.04em;box-shadow:0 2px 8px rgba(236,72,153,.4)}
+.video-ribbon::before{content:'▶ ';font-size:7px}
 
 /* ── UPLOAD PROGRESS ── */
 .uprog{position:absolute;inset:0;background:rgba(255,255,255,.96);display:none;flex-direction:column;align-items:center;justify-content:center;gap:8px;z-index:20}
@@ -1453,15 +1530,18 @@ function cardHtml(p) {
   const nf  = fotoCount(p.fotos||{});
   const cls = !p.activo ? 'inactive' : (p.tiene ? 'ok' : 'no');
   const sgAttr = (p.subgrupo||'').replace(/"/g,'&quot;');
+  const videoUrl = p.video || null;
   return `<div class="pcard ${cls}" id="card-${id}" data-id="${id}" data-estado="${p.tiene?'ok':'no'}" data-sg="${sgAttr}" data-foto-home="${p.foto_home||1}"
     ondragover="event.preventDefault();this.classList.add('drag-over')"
     ondragleave="this.classList.remove('drag-over')"
     ondrop="onDrop(event,${id})">
+    ${videoUrl?'<span class="video-ribbon">Video</span>':''}
     <div class="fotos-area" id="fa-${id}">
       ${[1,2,3,4,5,6].map(s=>slotHtml(id,s,(p.fotos||{})[s]||null)).join('')}
       <div class="fc-badge" id="fc-${id}">${nf}/6${(p.fotos||{})[4]?' · banner':''}${(p.fotos||{})[5]?' · story':''}</div>
     </div>
     <div class="home-row" id="hr-${id}">${buildHomeRow(id,p.fotos||{},p.foto_home||1)}</div>
+    <div class="video-row" id="vr-${id}">${buildVideoRow(id, videoUrl)}</div>
     <div class="uprog" id="uprog-${id}">
       <span style="font-size:11px;color:var(--mu)">Subiendo...</span>
       <div class="uprog-bar"><div class="uprog-fill" id="ufill-${id}"></div></div>
@@ -1531,6 +1611,81 @@ function clearSearch() {
   document.getElementById('siCnt').textContent = '';
   document.getElementById('searchSection').style.display = 'none';
   document.getElementById('catsSection').style.display   = '';
+}
+
+// ── VIDEO (upload / delete / preview) ────────────────────────
+function buildVideoRow(id, url){
+  if (url) {
+    return '<video src="'+url+'" muted playsinline preload="metadata" onmouseenter="this.play()" onmouseleave="this.pause();this.currentTime=0"></video>'
+      + '<span class="vlbl">Video</span>'
+      + '<span class="vstate has">activo</span>'
+      + '<div class="vbtn">'
+        + '<button onclick="triggerVideoUpload('+id+')">Cambiar</button>'
+        + '<button class="del" onclick="borrarVideo('+id+')">Quitar</button>'
+      + '</div>';
+  }
+  return '<span class="vlbl">Video</span>'
+    + '<span class="vstate">sin video</span>'
+    + '<div class="vbtn">'
+      + '<button class="prim" onclick="triggerVideoUpload('+id+')">+ Subir video</button>'
+    + '</div>';
+}
+var activeVideoId = null;
+var vfi = document.createElement('input');
+vfi.type = 'file'; vfi.accept = 'video/mp4,video/webm,video/quicktime'; vfi.style.display='none';
+document.body.appendChild(vfi);
+vfi.addEventListener('change', () => { if (vfi.files.length && activeVideoId) subirVideo(activeVideoId, vfi.files[0]); });
+
+function triggerVideoUpload(id){ activeVideoId = id; vfi.value=''; vfi.click(); }
+
+function subirVideo(id, file){
+  const limite = 50 * 1024 * 1024;
+  if (file.size > limite) { toast('El video supera 50MB','err'); return; }
+  const uprog = document.getElementById('uprog-'+id);
+  const fill  = document.getElementById('ufill-'+id);
+  uprog.classList.add('show');
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', 'admin.php?action=upload_video&id='+id);
+  xhr.upload.onprogress = function(e){
+    if (e.lengthComputable) fill.style.width = Math.min(Math.round(e.loaded/e.total*95), 95) + '%';
+  };
+  xhr.onload = function(){
+    fill.style.width = '100%';
+    setTimeout(() => {
+      uprog.classList.remove('show'); fill.style.width='0';
+      try{
+        const d = JSON.parse(xhr.responseText);
+        if (d.ok){
+          const row = document.getElementById('vr-'+id);
+          if (row) row.innerHTML = buildVideoRow(id, d.url);
+          // Añadir ribbon si no estaba
+          const card = document.getElementById('card-'+id);
+          if (card && !card.querySelector('.video-ribbon')){
+            const rb = document.createElement('span');
+            rb.className = 'video-ribbon'; rb.textContent = 'Video';
+            card.prepend(rb);
+          }
+          toast('Video subido','suc');
+        } else toast('Error: '+(d.msg||'desconocido'),'err');
+      }catch{ toast('Error procesando respuesta','err'); }
+    }, 300);
+  };
+  xhr.onerror = function(){ uprog.classList.remove('show'); toast('Error de conexión','err'); };
+  const fd = new FormData(); fd.append('video', file);
+  xhr.send(fd);
+}
+
+function borrarVideo(id){
+  if (!confirm('Eliminar el video de este producto?')) return;
+  fetch('admin.php?action=delete_video&id='+id).then(r=>r.json()).then(d=>{
+    if (d.ok){
+      const row = document.getElementById('vr-'+id);
+      if (row) row.innerHTML = buildVideoRow(id, null);
+      const rb = document.getElementById('card-'+id)?.querySelector('.video-ribbon');
+      rb?.remove();
+      toast('Video eliminado','suc');
+    } else toast('No se pudo eliminar','err');
+  });
 }
 
 // ── UPLOAD ───────────────────────────────────────────────────
