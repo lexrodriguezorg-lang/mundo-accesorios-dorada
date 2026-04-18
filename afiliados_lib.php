@@ -69,11 +69,26 @@ function afil_gen_codigo(string $nombre): string {
 }
 
 function afil_default_plantilla(): string {
+    $d = afil_read();
+    if (!empty($d['plantilla_global'])) return $d['plantilla_global'];
     return "Hola 🌸 soy {afil_nombre} de Mundo Accesorios Dorada.\n".
            "Vi que te interesa este producto:\n\n".
            "{producto_nombre} — {producto_precio}\n".
            "{producto_link}\n\n".
            "¿Te ayudo con la compra? Tengo descuentos para ti 💖";
+}
+
+// Devuelve array de plantillas (principal + variantes). Siempre al menos 1.
+function afil_plantillas(array $afil): array {
+    $out = [];
+    $msg = trim($afil['mensaje_agente'] ?? '');
+    if ($msg !== '') $out[] = $msg;
+    foreach (['variante_a','variante_b'] as $k) {
+        $v = trim($afil[$k] ?? '');
+        if ($v !== '') $out[] = $v;
+    }
+    if (empty($out)) $out[] = afil_default_plantilla();
+    return $out;
 }
 
 function afil_cliente_ip(): string {

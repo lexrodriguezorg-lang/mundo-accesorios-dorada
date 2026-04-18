@@ -439,6 +439,8 @@ if ($auth && $esAdmin && $action === 'afil_save') {
     $activa   = ($_POST['activa'] ?? '1') === '1';
     $telef    = trim($_POST['wa_telefono'] ?? '');
     $msgAg    = trim($_POST['mensaje_agente'] ?? '');
+    $varA     = trim($_POST['variante_a'] ?? '');
+    $varB     = trim($_POST['variante_b'] ?? '');
 
     if ($u === '' || !preg_match('/^[a-z0-9_.-]{3,24}$/i', $u))
         die(json_encode(['ok'=>false,'msg'=>'Usuario inválido (3-24 caracteres alfanuméricos)']));
@@ -469,6 +471,8 @@ if ($auth && $esAdmin && $action === 'afil_save') {
             'activa'            => $activa,
             'creada'            => date('Y-m-d'),
             'mensaje_agente'    => $msgAg ?: afil_default_plantilla(),
+            'variante_a'        => $varA,
+            'variante_b'        => $varB,
             'wa_telefono'       => $telef,
             'clics_total'       => 0,
             'clics_recientes'   => [],
@@ -491,6 +495,8 @@ if ($auth && $esAdmin && $action === 'afil_save') {
         $a['activa']            = $activa;
         $a['wa_telefono']       = $telef;
         $a['mensaje_agente']    = $msgAg ?: afil_default_plantilla();
+        $a['variante_a']        = $varA;
+        $a['variante_b']        = $varB;
         if ($clave !== '') {
             if (strlen($clave) < 6) die(json_encode(['ok'=>false,'msg'=>'La clave debe tener mín 6 caracteres']));
             $a['clave_hash'] = password_hash($clave, PASSWORD_DEFAULT);
@@ -545,6 +551,60 @@ if ($auth && $esAdmin && $action === 'afil_toggle_pago') {
     $v = &$data['afiliadas'][$i]['ventas'][$idx];
     $v['pagada'] = empty($v['pagada']);
     echo json_encode(['ok'=>afil_write($data),'pagada'=>$v['pagada']]);
+    exit;
+}
+
+if ($auth && $esAdmin && $action === 'afil_plantilla_global') {
+    header('Content-Type: application/json');
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $pl = trim($_POST['plantilla'] ?? '');
+        $d = afil_read();
+        if ($pl === '') unset($d['plantilla_global']);
+        else $d['plantilla_global'] = $pl;
+        echo json_encode(['ok'=>afil_write($d)]);
+    } else {
+        $d = afil_read();
+        echo json_encode(['ok'=>true,'plantilla'=>$d['plantilla_global']??'','default'=>afil_default_plantilla()]);
+    }
+    exit;
+}
+
+if ($auth && $esAdmin && $action === 'afil_preview') {
+    header('Content-Type: application/json');
+    $u = trim($_GET['user'] ?? '');
+    $a = afil_find_user($u);
+    if (!$a) die(json_encode(['ok'=>false]));
+    // Elegir el primer producto con foto como sample
+    $cat = json_decode(file_get_contents(DATA), true)['productos'] ?? [];
+    $sample = null;
+    foreach ($cat as $p) {
+        if (!empty($p['activo']) && ($p['precio'] ?? 0) > 0 && url_f($p['id'])) {
+            $sample = $p; break;
+        }
+    }
+    $ctx = $sample ? [
+        'producto_id'     => $sample['id'],
+        'producto_nombre' => $sample['nombre'],
+        'producto_precio' => '$' . number_format($sample['precio'], 0, ',', '.'),
+    ] : [];
+    $plantillas = afil_plantillas($a);
+    $rendered = array_map(fn($tpl) => strtr($tpl, array_merge([
+        '{afil_nombre}'     => $a['nombre']  ?? $a['user'] ?? '',
+        '{afil_user}'       => $a['user']    ?? '',
+        '{afil_codigo}'     => $a['codigo']  ?? '',
+        '{link_home}'       => 'https://mundoaccesoriosdorada.com/?ref='.urlencode($a['codigo']??''),
+        '{link_catalogo}'   => 'https://mundoaccesoriosdorada.com/catalogo.php?ref='.urlencode($a['codigo']??''),
+        '{producto_nombre}' => $sample['nombre'] ?? '[producto de ejemplo]',
+        '{producto_precio}' => $sample ? ('$'.number_format($sample['precio'],0,',','.')) : '[precio]',
+        '{producto_link}'   => $sample ? ('https://mundoaccesoriosdorada.com/producto.php?id='.$sample['id'].'&ref='.urlencode($a['codigo']??'')) : 'https://mundoaccesoriosdorada.com/?ref='.urlencode($a['codigo']??''),
+    ]))
+    , $plantillas);
+    echo json_encode([
+        'ok'=>true,
+        'afil'=>['user'=>$a['user'],'nombre'=>$a['nombre'],'codigo'=>$a['codigo']],
+        'sample'=>$sample ? ['id'=>$sample['id'],'nombre'=>$sample['nombre']] : null,
+        'rendered'=>$rendered,
+    ]);
     exit;
 }
 
@@ -1140,9 +1200,56 @@ body{font-family:"Poppins",sans-serif;background:var(--bg);color:var(--txt);min-
     <div class="afil-body">
       <div class="afil-tools">
         <button class="afil-btn" onclick="afilAbrirForm()">+ Nueva afiliada</button>
+        <button class="afil-btn sec" onclick="afilPlantillaGlobal()">Plantilla global del agente</button>
         <button class="afil-btn sec" onclick="afilCargar()">Actualizar</button>
       </div>
       <div id="afilGrid"><div class="afil-empty">Cargando...</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de preview del agente (lee-solo) -->
+<div class="afil-form-back" id="afilPrevBack" onclick="if(event.target===this)afilPrevCerrar()">
+  <div class="afil-form" style="max-width:560px">
+    <div class="afil-form-hdr">
+      <h3 id="afilPrevTit">Preview del agente</h3>
+      <button class="aud-close" onclick="afilPrevCerrar()">&#10005;</button>
+    </div>
+    <div class="afil-form-body" id="afilPrevBody">Cargando...</div>
+    <div class="afil-form-foot">
+      <div class="spacer"></div>
+      <button class="afil-btn sec" onclick="afilPrevCerrar()">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal plantilla global del agente -->
+<div class="afil-form-back" id="afilGlobBack" onclick="if(event.target===this)afilGlobCerrar()">
+  <div class="afil-form" style="max-width:620px">
+    <div class="afil-form-hdr">
+      <h3>Plantilla global del agente</h3>
+      <button class="aud-close" onclick="afilGlobCerrar()">&#10005;</button>
+    </div>
+    <div class="afil-form-body">
+      <div class="afil-msg" id="afilGlobMsg"></div>
+      <div class="g full">
+        <div>
+          <label>Plantilla global (se aplica a afiliadas sin plantilla personalizada)</label>
+          <textarea id="afilGlobTxt" placeholder="Dejá vacío para restaurar el default del sistema" style="min-height:180px"></textarea>
+          <div class="hint">Variables: <code>{afil_nombre}</code>, <code>{afil_codigo}</code>, <code>{producto_nombre}</code>, <code>{producto_precio}</code>, <code>{producto_link}</code>, <code>{link_home}</code>, <code>{link_catalogo}</code></div>
+        </div>
+      </div>
+      <div class="g full">
+        <div>
+          <label>Default del sistema (referencia)</label>
+          <pre id="afilGlobDef" style="background:#F0EEFF;color:var(--vi);padding:10px 12px;border-radius:8px;font-size:11px;line-height:1.55;white-space:pre-wrap;font-family:'Space Mono'"></pre>
+        </div>
+      </div>
+    </div>
+    <div class="afil-form-foot">
+      <button class="afil-btn sec" onclick="afilGlobCerrar()">Cancelar</button>
+      <div class="spacer"></div>
+      <button class="afil-btn" onclick="afilGlobGuardar()">Guardar plantilla global</button>
     </div>
   </div>
 </div>
@@ -1214,9 +1321,24 @@ body{font-family:"Poppins",sans-serif;background:var(--bg);color:var(--txt);min-
       </div>
       <div class="g full">
         <div>
-          <label>Mensaje del agente · plantilla personalizada</label>
+          <label>Mensaje del agente · plantilla principal</label>
           <textarea id="afilMsg" placeholder="Dejá vacío para usar la plantilla por defecto"></textarea>
           <div class="hint">Variables: <code>{afil_nombre}</code>, <code>{afil_codigo}</code>, <code>{producto_nombre}</code>, <code>{producto_precio}</code>, <code>{producto_link}</code>, <code>{link_home}</code>, <code>{link_catalogo}</code></div>
+        </div>
+      </div>
+      <div class="g">
+        <div>
+          <label>Variante A (opcional)</label>
+          <textarea id="afilVarA" placeholder="Otra versión del mensaje para variar"></textarea>
+        </div>
+        <div>
+          <label>Variante B (opcional)</label>
+          <textarea id="afilVarB" placeholder="Segunda variante"></textarea>
+        </div>
+      </div>
+      <div class="g full">
+        <div>
+          <button type="button" class="afil-btn sec" onclick="afilPreviewActual()" style="width:100%;padding:10px">👁 Vista previa del mensaje renderizado</button>
         </div>
       </div>
     </div>
@@ -2234,6 +2356,7 @@ function afilPintar(){
       </div>
       <div class="acts">
         <button onclick="afilEditar('${a.user.replace(/'/g,"\\'")}')">Editar</button>
+        <button onclick="afilPreview('${a.user.replace(/'/g,"\\'")}')">👁 Agente</button>
         <button onclick="afilVerVentas('${a.user.replace(/'/g,"\\'")}')">Ventas</button>
         <button onclick="afilAgregarVenta('${a.user.replace(/'/g,"\\'")}')">+ venta</button>
         <button class="del" onclick="afilEliminarDirecto('${a.user.replace(/'/g,"\\'")}')">Quitar</button>
@@ -2264,6 +2387,8 @@ function afilAbrirForm(){
   document.getElementById('afilValor').value = '10';
   document.getElementById('afilProdCom').value = '';
   document.getElementById('afilMsg').value = afilPlantillaDefault;
+  document.getElementById('afilVarA').value = '';
+  document.getElementById('afilVarB').value = '';
   document.getElementById('afilFormDel').style.display = 'none';
   document.getElementById('afilFormMsg').classList.remove('show','ok');
   afilToggleTipo();
@@ -2298,6 +2423,8 @@ async function afilEditar(user){
     document.getElementById('afilValor').value = a.valor_comision || 0;
     document.getElementById('afilProdCom').value = a.producto_comision || '';
     document.getElementById('afilMsg').value = a.mensaje_agente || afilPlantillaDefault;
+    document.getElementById('afilVarA').value = a.variante_a || '';
+    document.getElementById('afilVarB').value = a.variante_b || '';
     document.getElementById('afilFormDel').style.display = '';
     document.getElementById('afilFormMsg').classList.remove('show','ok');
     afilToggleTipo();
@@ -2317,6 +2444,8 @@ async function afilGuardar(){
   fd.append('valor_comision',   document.getElementById('afilValor').value);
   fd.append('producto_comision',document.getElementById('afilProdCom').value);
   fd.append('mensaje_agente',   document.getElementById('afilMsg').value);
+  fd.append('variante_a',       document.getElementById('afilVarA').value);
+  fd.append('variante_b',       document.getElementById('afilVarB').value);
   const msg = document.getElementById('afilFormMsg');
   msg.classList.remove('show','ok');
   try{
@@ -2374,9 +2503,68 @@ async function afilVerVentas(user){
   }
 }
 
+async function afilPreview(user){
+  document.getElementById('afilPrevTit').textContent = 'Preview del agente · ' + user;
+  document.getElementById('afilPrevBody').innerHTML = '<div style="padding:20px;text-align:center;color:var(--mu)">Cargando...</div>';
+  document.getElementById('afilPrevBack').classList.add('show');
+  try{
+    const d = await fetch('admin.php?action=afil_preview&user='+encodeURIComponent(user)).then(r=>r.json());
+    if (!d.ok) { document.getElementById('afilPrevBody').innerHTML = '<div class="afil-msg show">No se pudo cargar</div>'; return; }
+    const sampleTxt = d.sample ? `Ejemplo usando: <strong>${escapeHtml(d.sample.nombre)}</strong> (#${d.sample.id})` : 'Sin productos con foto para el ejemplo';
+    const items = (d.rendered || []).map((txt, i) => {
+      const etiqueta = i === 0 ? 'Principal' : (i === 1 ? 'Variante A' : 'Variante B');
+      const waUrl = 'https://wa.me/?text=' + encodeURIComponent(txt);
+      return `<div style="margin-bottom:14px">
+        <div style="font-size:10px;font-weight:700;color:var(--fu);letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">${etiqueta}</div>
+        <pre style="background:#0F0A1A;color:#F0EEFF;padding:12px 14px;border-radius:10px;font-size:12px;line-height:1.55;white-space:pre-wrap;font-family:'Poppins';margin-bottom:6px">${escapeHtml(txt)}</pre>
+        <div style="display:flex;gap:8px">
+          <button class="afil-btn sec" onclick="navigator.clipboard.writeText(${JSON.stringify(txt)}).then(()=>toast('Copiado','suc'))" style="padding:6px 12px;font-size:10px">📋 Copiar</button>
+          <a class="afil-btn" href="${waUrl}" target="_blank" style="padding:6px 12px;font-size:10px;background:linear-gradient(135deg,#25D366,#1AAF55);text-decoration:none">Probar en WhatsApp</a>
+        </div>
+      </div>`;
+    }).join('');
+    document.getElementById('afilPrevBody').innerHTML = `
+      <div style="font-size:12px;color:var(--mu);margin-bottom:14px">${sampleTxt}</div>
+      ${items || '<div class="afil-empty">Sin plantillas</div>'}
+    `;
+  }catch{ document.getElementById('afilPrevBody').innerHTML = '<div class="afil-msg show">Error</div>'; }
+}
+function afilPrevCerrar(){ document.getElementById('afilPrevBack').classList.remove('show'); }
+
+function afilPreviewActual(){
+  const u = document.getElementById('afilOriginalUser').value;
+  if (!u) { alert('Guardá primero la afiliada para previsualizar'); return; }
+  afilPreview(u);
+}
+
+async function afilPlantillaGlobal(){
+  try{
+    const d = await fetch('admin.php?action=afil_plantilla_global').then(r=>r.json());
+    document.getElementById('afilGlobTxt').value = d.plantilla || '';
+    document.getElementById('afilGlobDef').textContent = d.default || '';
+    document.getElementById('afilGlobMsg').classList.remove('show','ok');
+    document.getElementById('afilGlobBack').classList.add('show');
+  }catch{ toast('Error','err'); }
+}
+function afilGlobCerrar(){ document.getElementById('afilGlobBack').classList.remove('show'); }
+async function afilGlobGuardar(){
+  const fd = new FormData();
+  fd.append('plantilla', document.getElementById('afilGlobTxt').value);
+  const msg = document.getElementById('afilGlobMsg');
+  msg.classList.remove('show','ok');
+  try{
+    const d = await fetch('admin.php?action=afil_plantilla_global',{method:'POST',body:fd}).then(r=>r.json());
+    if (!d.ok){ msg.textContent='Error'; msg.classList.add('show'); return; }
+    msg.textContent='Plantilla global guardada'; msg.classList.add('show','ok');
+    setTimeout(afilGlobCerrar, 700);
+  }catch{ msg.textContent='Error de conexión'; msg.classList.add('show'); }
+}
+
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape'){
-    if (document.getElementById('afilFormBack').classList.contains('show')) afilCerrarForm();
+    if (document.getElementById('afilPrevBack').classList.contains('show')) afilPrevCerrar();
+    else if (document.getElementById('afilGlobBack').classList.contains('show')) afilGlobCerrar();
+    else if (document.getElementById('afilFormBack').classList.contains('show')) afilCerrarForm();
     else if (document.getElementById('afilBack').classList.contains('show')) cerrarAfil();
   }
 });

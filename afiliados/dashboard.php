@@ -190,6 +190,10 @@ body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
     </div>
   </div>
   <div class="hdr-btns">
+    <a class="btn-h" href="#cardAgente" onclick="document.getElementById('cardAgente').scrollIntoView({behavior:'smooth'});return false;"
+       style="background:linear-gradient(135deg,#B5179E,#7209B7);border-color:transparent;font-weight:600">
+      Mi agente
+    </a>
     <a class="btn-h" href="/" target="_blank">Ver sitio</a>
     <a class="btn-h out" href="login.php?salir=1">Salir</a>
   </div>
@@ -234,8 +238,21 @@ body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
 </div>
 
 <!-- MI AGENTE -->
-<div class="card">
+<?php
+$plantillas_list = afil_plantillas($afil);
+$plant_labels = ['Principal','Variante A','Variante B'];
+?>
+<div class="card" id="cardAgente">
   <h2>Mi agente <span class="tag">mensaje + WhatsApp</span></h2>
+
+  <?php if (count($plantillas_list) > 1): ?>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" id="plantTabs">
+    <?php foreach ($plantillas_list as $pi => $_): ?>
+    <button type="button" class="btn-sm <?= $pi===0?'prim':'' ?>" data-pi="<?= $pi ?>" onclick="elegirPlantilla(<?= $pi ?>)"><?= $plant_labels[$pi] ?? ('Var '.$pi) ?></button>
+    <?php endforeach ?>
+  </div>
+  <?php endif ?>
+
   <div class="agente-fila">
     <select class="sel" id="agProd" onchange="actualizarAgente()">
       <option value="">— Mensaje general (sin producto específico) —</option>
@@ -250,10 +267,13 @@ body::before{content:'';position:fixed;inset:0;z-index:0;pointer-events:none;
   <div class="agente-acc">
     <button class="btn-sm prim" onclick="copiarMensaje()">📋 Copiar mensaje</button>
     <a class="btn-sm wa" id="agWa" href="#" target="_blank">Enviar por WhatsApp</a>
+    <?php if (!empty($afil['wa_telefono'])): ?>
+    <a class="btn-sm wa" id="agWaMio" href="#" target="_blank" title="Abrir tu WhatsApp con el mensaje listo para enviar a una clienta">Abrir mi WA</a>
+    <?php endif ?>
   </div>
   <div class="agente-hint">
-    El mensaje se genera con tu código y el producto seleccionado. El link lleva al producto ya marcado con tu referido.
-    El admin puede ajustar tu plantilla: úsa variables como <code>{afil_nombre}</code>, <code>{producto_nombre}</code>, <code>{producto_precio}</code>, <code>{producto_link}</code>.
+    El mensaje se arma con tu código y el producto elegido. El link lleva al producto ya marcado con tu referido (30 días).
+    <?php if (count($plantillas_list) > 1): ?>Cambiá entre plantillas con las pestañas de arriba.<?php endif ?>
   </div>
 </div>
 
@@ -322,7 +342,9 @@ var CODIGO = <?= json_encode($codigo) ?>;
 var LINK_BASE = <?= json_encode($link_base) ?>;
 var SITE = 'https://mundoaccesoriosdorada.com';
 var WA_NUM = '573233453004';
-var AFIL = <?= json_encode(['nombre'=>$nombre,'user'=>$user,'codigo'=>$codigo,'mensaje_agente'=>$afil['mensaje_agente']??afil_default_plantilla()]) ?>;
+var AFIL = <?= json_encode(['nombre'=>$nombre,'user'=>$user,'codigo'=>$codigo,'wa'=>$afil['wa_telefono']??'']) ?>;
+var PLANTILLAS = <?= json_encode($plantillas_list) ?>;
+var plantActual = 0;
 
 function copiarLink(){
   navigator.clipboard?.writeText(LINK_BASE).then(()=>{
@@ -343,6 +365,13 @@ function toast(t){
   document.body.appendChild(d);setTimeout(()=>d.remove(),1800);
 }
 
+function elegirPlantilla(i){
+  plantActual = i;
+  document.querySelectorAll('#plantTabs button').forEach(b => {
+    b.classList.toggle('prim', parseInt(b.dataset.pi) === i);
+  });
+  actualizarAgente();
+}
 function actualizarAgente(){
   var sel  = document.getElementById('agProd');
   var opt  = sel.options[sel.selectedIndex];
@@ -359,13 +388,16 @@ function actualizarAgente(){
       ? (SITE + '/producto.php?id=' + prodId + '&ref=' + encodeURIComponent(AFIL.codigo))
       : LINK_BASE,
   };
-  var t = AFIL.mensaje_agente;
+  var t = PLANTILLAS[plantActual] || PLANTILLAS[0] || '';
   Object.keys(ctx).forEach(function(k){ t = t.split(k).join(ctx[k]); });
   document.getElementById('agMsg').textContent = t;
-  document.getElementById('agWa').href = 'https://wa.me/?text=' + encodeURIComponent(t);
+  var enc = encodeURIComponent(t);
+  document.getElementById('agWa').href = 'https://wa.me/?text=' + enc;
+  var mio = document.getElementById('agWaMio');
+  if (mio && AFIL.wa) mio.href = 'https://wa.me/' + encodeURIComponent(AFIL.wa) + '?text=' + enc;
 }
-// Inicializar WA link
-document.getElementById('agWa').href = 'https://wa.me/?text=' + encodeURIComponent(document.getElementById('agMsg').textContent);
+// Inicializar WA links
+actualizarAgente();
 </script>
 </body>
 </html>
